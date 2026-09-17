@@ -899,9 +899,9 @@ class App(tk.Tk):
         self.pending.pack(fill="both", expand=True)
         self.setup_tab()
         self.protocol("WM_DELETE_WINDOW", self.close)
-        self.after(100, self.poll)
-        self.after(300, self.start_sync)
-        self.after(self.config["sync_seconds"] * 1000, self.periodic)
+        self.poll_after = self.after(100, self.poll)
+        self.initial_sync_after = self.after(300, self.start_sync)
+        self.periodic_after = self.after(self.config["sync_seconds"] * 1000, self.periodic)
         self.refresh()
 
     def change_appearance(self, event=None):
@@ -931,12 +931,12 @@ class App(tk.Tk):
         except queue.Empty:
             pass
         if not self.closing:
-            self.after(100, self.poll)
+            self.poll_after = self.after(100, self.poll)
 
     def periodic(self):
         self.start_sync()
         if not self.closing:
-            self.after(self.config["sync_seconds"] * 1000, self.periodic)
+            self.periodic_after = self.after(self.config["sync_seconds"] * 1000, self.periodic)
 
     def start_sync(self):
         if self.syncing or self.closing:
@@ -1374,6 +1374,14 @@ class App(tk.Tk):
 
     def close(self):
         self.closing = True
+        for callback in (getattr(self, "poll_after", None),
+                         getattr(self, "initial_sync_after", None),
+                         getattr(self, "periodic_after", None)):
+            if callback:
+                try:
+                    self.after_cancel(callback)
+                except tk.TclError:
+                    pass  # The callback may already have run.
         self.destroy()  # Every entry was committed before the form displayed 'saved'.
 
 

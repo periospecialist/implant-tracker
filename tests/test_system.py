@@ -262,7 +262,9 @@ class FolderTests(BaseTest):
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self.server.run, args=(self.stop, 0.01), daemon=True)
         self.thread.start()
-        self.config = {"exchange_folder": str(self.folder), "response_timeout": 3}
+        # Windows CI can take several seconds to durably commit 60 movements while
+        # twelve clients poll the same folder. Production uses a 30-second timeout.
+        self.config = {"exchange_folder": str(self.folder), "response_timeout": 15}
 
     def tearDown(self):
         self.stop.set()
@@ -295,6 +297,20 @@ class FolderTests(BaseTest):
         self.assertEqual(response["results"][0]["status"], "accepted")
         accepted_id = response["results"][0]["id"]
         self.assertEqual(transport.post("/snapshot", {"known_ids": [accepted_id]})["logs"]["usage"][0]["extra"], {"lot": "ABC-123"})
+
+    def test_host_settings_operations_through_folder_transport(self):
+        saved_exports, saved_fields = [], []
+        self.server.save_export_settings = saved_exports.append
+        self.server.save_fields = saved_fields.append
+        transport = Transport(self.config)
+        export_result = transport.post("/export_settings", {
+            "inventory_csv_path": "", "csv_backup_directory": ""})
+        directory_result = transport.post("/staff_choices", {
+            "field": "assistant", "action": "add", "values": ["New Assistant"]})
+        self.assertTrue(export_result["saved"])
+        self.assertEqual(saved_exports[-1], {"inventory_csv_path": "", "csv_backup_directory": ""})
+        self.assertEqual(directory_result["choices"], ["New Assistant"])
+        self.assertEqual(saved_fields[-1], self.server.fields)
 
     def test_url_is_rejected_as_folder(self):
         with self.assertRaises(ValueError):
