@@ -1,0 +1,84 @@
+{
+  "exchange_folder": "\\\\SERVER\\Perio\\IMPLANTS\\Inventory Exchange",
+  "response_timeout": 30,
+  "sync_seconds": 15,
+  "fields": {
+    "usage": [
+      {
+        "key": "tooth",
+        "label": "Tooth"
+      },
+      {
+        "key": "placement",
+        "label": "Placed / O Box",
+        "choices": [
+          "Placed",
+          "O Box"
+        ],
+        "required": true
+      },
+      {
+        "key": "patient",
+        "label": "Patient name",
+        "required": true
+      },
+      {
+        "key": "periodontist",
+        "label": "Periodontist",
+        "required": true,
+        "choices": []
+      },
+      {
+        "key": "referring_dentist",
+        "label": "Referring dentist",
+        "choices": []
+      },
+      {
+        "key": "assistant",
+        "label": "Assistant",
+        "required": true,
+        "choices": []
+      },
+      {
+        "key": "notes",
+        "label": "Notes"
+      }
+    ],
+    "addition": [
+      {
+        "key": "signed_by",
+        "label": "Signed off by",
+        "required": true,
+        "choices": []
+      },
+      {
+        "key": "notes",
+        "label": "Notes"
+      }
+    ]
+  },
+  "manufacturer_choices": [
+    "Straumann",
+    "Nobel"
+  ],
+  "implant_type_choices": [
+    "BL NC",
+    "BL RC",
+    "BLT NC",
+    "BLT RC",
+    "BLC RB",
+    "BLC WB",
+    "Active NP",
+    "Active RP",
+    "Parallel NP",
+    "Parallel RP"
+  ],
+  "component_type_choices": [
+    "Implant Body",
+    "Cover Screw",
+    "Healing Abutment",
+    "AHA XC",
+    "Crown",
+    "Other"
+  ]
+}

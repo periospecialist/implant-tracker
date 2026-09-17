@@ -1,0 +1,48 @@
+{
+  "balance": {
+    "sheet": "Base Supply",
+    "header_row": 4,
+    "columns": {
+      "ref_id": "REF ID",
+      "implant_type": "Implant Type",
+      "size": "Item / Size",
+      "component_type": "Component",
+      "opening_quantity": "Base Supply"
+    }
+  },
+  "thresholds": {
+    "sheet": "Inventory Full Supply",
+    "header_row": 5,
+    "columns": {
+      "ref_id": "REF ID",
+      "reorder_level": "Reorder Quantity"
+    }
+  },
+  "log": {
+    "sheet": "Component Change Log",
+    "header_row": 5,
+    "columns": {
+      "date": "Date",
+      "ref_id": "REF ID",
+      "quantity": "Quantity",
+      "tooth": "Tooth #",
+      "placement": "Placed / O Box",
+      "patient": "Patient",
+      "periodontist": "Periodontist",
+      "referring_dentist": "Referring Dentist",
+      "assistant": "Assistant",
+      "notes": "Notes"
+    }
+  },
+  "component_aliases": {
+    "Body": "Implant Body",
+    "HA": "Healing Abutment",
+    "CS": "Cover Screw",
+    "Prosth (Crown)": "Crown"
+  },
+  "manufacturer_prefixes": [
+    "Straumann",
+    "Nobel"
+  ],
+  "ref_aliases": {}
+}

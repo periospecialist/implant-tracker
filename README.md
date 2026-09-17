@@ -185,7 +185,3 @@ After installation, verify both EXEs on Windows using a test entry: record usage
 | `uninstall.ps1` / `UNINSTALL.cmd` | Guided local removal, optional backup, and separately confirmed shared-data removal |
 
 Run tests from the project folder using `python -m unittest discover -s tests -v`.
-#   i m p l a n t - t r a c k e r  
- #   i m p l a n t - t r a c k e r  
- #   i m p l a n t - t r a c k e r  
- 
