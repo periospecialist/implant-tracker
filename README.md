@@ -1,5 +1,7 @@
 # Implant Inventory 2.7.0 — shared-folder edition
 
+[![Build and release Windows apps](https://github.com/periospecialist/implant-tracker/actions/workflows/windows-release.yml/badge.svg)](https://github.com/periospecialist/implant-tracker/actions/workflows/windows-release.yml)
+
 UI update: Manufacturer and Component Type share one horizontal filter row. Implant Type and Export shown rows share the second row. The Implant Type checkbox dropdown remains open while choices are selected. Inventory text is bold. Reorder is a fixed column with white YES/NO labels on red/green backgrounds, independent of manufacturer row colors. Rebuild and replace the desktop client folder; no host update is required.
 
 The desktop apps and one always-on host exchange files through a folder you can already access, such as `\\SERVER\Perio\IMPLANTS\Inventory Exchange`. There are **no application accounts, access keys, URLs, certificates, or listening firewall ports**. Windows access to the shared folder controls access to the inventory, including component editing and imports.
@@ -63,6 +65,8 @@ The console prints the local database path and exchange folder. Leave it open. T
 | `poll_seconds` | Host checks for entries every 2 seconds by default |
 | `backup_directory` | Empty means the exchange folder's `backups` subfolder; an existing custom setting is preserved on upgrade |
 | `backup_hours` | Backup interval; default 12 hours |
+| `inventory_csv_path` | Exact host-written current inventory CSV path; configured in Setup |
+| `csv_backup_directory` | Folder for host-written, dated inventory CSV backups; configured in Setup |
 | `fields` | Configurable Usage and Stocking fields |
 
 The database path must remain local to the host. UNC and Windows mapped network drives are rejected for the live database. The exchange and backup paths may be UNC paths. Prefer a UNC path to a mapped drive letter so every PC uses the same location.
@@ -95,10 +99,11 @@ Completed abandoned responses and incomplete transfer files expire after 24 hour
 - **Usage:** date, REF ID, positive quantity used, tooth, a locked two-choice **Placed / O Box** selector, patient, periodontist, referring dentist, assistant, notes, and configurable extra fields. Entry controls use compact widths so the form does not stretch short values across the window.
 - **Stocking:** date, REF ID, positive quantity added, signed off by, notes, and configurable extra fields.
 - **REF ID lookup:** typing in the form filters existing REF IDs, with prefix matches first. Press Enter to autofill the best match. **Search / select** opens a searchable selector where typing continues to narrow REF IDs while the choices are visible. Each result includes its manufacturer, implant type, and size. An exact match immediately shows a green verification panel with the item name, component type, and estimated quantity.
-- **Inventory:** one Quantity column shows the local estimated quantity; brief differences are possible while clients synchronize. Host, pending, Attention, and Other Parts columns are omitted from this view. Click headings to sort and combine manual column filters with the three compact checkbox menus. An empty menu means **Any**; each checked Manufacturer, Component Type, or Implant Type is included. Implant Type choices are naturally sorted and recalculated from the selected manufacturers and component types. Long lists flow into additional menu columns instead of expanding the dashboard vertically. A red marker appears only in the Reorder? cell when ordering is needed. A negative Quantity cell shows a yellow error marker.
+- **Name lookup:** Periodontist, Referring Dentist, and Assistant use the same prefix-first substring filtering and **Search / select** workflow as REF ID.
+- **Inventory:** one Quantity column shows the local estimated quantity; brief differences are possible while clients synchronize. Host, pending, Attention, and Other Parts columns are omitted from this view. Click headings to sort and combine manual column filters with the three compact checkbox menus. An empty menu means **Any**; each checked Manufacturer, Component Type, or Implant Type is included. Implant Type choices are naturally sorted and recalculated from the selected manufacturers and component types. Long lists flow into additional menu columns instead of expanding the dashboard vertically. A red marker appears only in the Reorder? cell when ordering is needed. A negative Quantity cell shows a yellow error marker. Double-click a **Reorder at** cell to edit it directly; Enter or leaving the cell sends the revision-checked change to the host.
 - **History:** separate usage and addition tables show the latest 2,000 entries per log. Older records remain in the host database. Filtered CSV exports retain custom fields.
 - **Sync queue:** pending entries, entries awaiting receipt confirmation, and rejected entries with reasons. Resolve an error then retry, or cancel a rejected entry and enter its replacement.
-- **Setup:** one exchange-folder setting and the Excel migration preview. Anyone with folder access can edit components and import into an empty database.
+- **Setup:** the exchange-folder setting, host-owned automatic CSV settings, clinical name directories, and the Excel migration preview. Add or remove Periodontists, Referring Dentists, and Assistants centrally. Referring Dentists can be imported from a chosen CSV column; blank and case-insensitively matching names are skipped automatically. Set an exact current-inventory `.csv` path for an Excel dashboard and a separate folder for dated CSV backups. Only `InventoryServer.exe` writes these files, and it exports all inventory rows whenever authoritative inventory data changes. Leaving either destination blank disables that output. Anyone with folder access can edit components and import into an empty database.
 
 Placed and O Box are usage classifications; both deduct the quantity. Negative current stock is retained and highlighted if disconnected PCs collectively report more usage than the last count. Reconcile physical counts using an addition or usage for the difference with an explanatory note.
 
@@ -159,6 +164,16 @@ present. Python remains installed because other programs may use it.
 Local desktop payloads still use Windows DPAPI encryption, tied to the original Windows profile. This does not require an application login. Keep that profile and disk to recover unsent entries; copying the encrypted cache to a different Windows account is not a recovery method.
 
 ## Build and acceptance check
+
+### Automated Windows builds and releases
+
+GitHub Actions tests and builds both Windows x64 applications on every pull request and every push to `master`. A successful `master` push publishes a prerelease containing:
+
+- `ImplantInventory-Windows-x64.zip`
+- `InventoryServer-Windows-x64.zip`
+- `SHA256SUMS.txt`
+
+Pushing a version tag such as `v2.8.0` publishes the same verified packages as a normal GitHub Release. Each ZIP contains the complete PyInstaller folder, including `_internal`; extract and keep that folder together. Manual workflow runs also publish a uniquely numbered prerelease.
 
 `BUILD_WINDOWS.cmd` requires Windows. It locates Python 3.12 x64 or installs the per-user Python 3.12 package through `winget`, installs the pinned build dependencies, skips the test suite, and then produces:
 

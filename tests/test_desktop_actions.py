@@ -7,6 +7,24 @@ from inventory.desktop import App
 
 
 class DesktopActionTests(unittest.TestCase):
+    def test_reorder_level_edit_posts_revision_checked_component(self):
+        row = {"ref_id": "REF-1", "manufacturer": "Test", "implant_type": "Type",
+               "size": "4x10", "component_type": "Implant Body", "other_parts": "",
+               "reorder_level": 2, "revision": 4}
+        transport = MagicMock()
+        fake = SimpleNamespace(status=MagicMock(), engine=SimpleNamespace(transport=transport),
+                               start_sync=MagicMock())
+        fake.background = lambda work, success, failure=None: success(work())
+
+        App.update_reorder_level(fake, row, "7")
+
+        transport.post.assert_called_once_with("/components", {
+            "ref_id": "REF-1", "manufacturer": "Test", "implant_type": "Type",
+            "size": "4x10", "component_type": "Implant Body", "other_parts": "",
+            "reorder_level": 7, "revision": 4,
+        })
+        fake.start_sync.assert_called_once_with()
+
     def test_remove_usage_uses_engine_transport_and_installs_snapshot(self):
         row = {"id": "entry-1", "ref_id": "REF-1", "quantity": 2}
         snapshot = {"inventory": [], "logs": {"usage": [], "addition": []},

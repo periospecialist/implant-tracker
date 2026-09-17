@@ -1,0 +1,134 @@
+name: Build and release Windows apps
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Test and build Windows x64
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.12 x64
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
+
+      - name: Install build dependencies
+        run: python -m pip install --requirement requirements-build.txt
+
+      - name: Run test suite
+        run: python -m unittest discover -s tests -v
+
+      - name: Build Implant Inventory
+        run: python -m PyInstaller --noconfirm --clean ImplantInventory.spec
+
+      - name: Build Inventory Server
+        run: python -m PyInstaller --noconfirm --clean InventoryServer.spec
+
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          $Required = @(
+            'dist\ImplantInventory\ImplantInventory.exe',
+            'dist\ImplantInventory\_internal',
+            'dist\InventoryServer\InventoryServer.exe',
+            'dist\InventoryServer\_internal'
+          )
+          foreach ($Path in $Required) {
+            if (-not (Test-Path -LiteralPath $Path)) {
+              throw "Required build output is missing: $Path"
+            }
+          }
+
+      - name: Package applications and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+          Push-Location dist
+          Compress-Archive -Path ImplantInventory -DestinationPath ..\release\ImplantInventory-Windows-x64.zip -CompressionLevel Optimal
+          Compress-Archive -Path InventoryServer -DestinationPath ..\release\InventoryServer-Windows-x64.zip -CompressionLevel Optimal
+          Pop-Location
+
+          $Lines = Get-ChildItem release\*.zip | Sort-Object Name | ForEach-Object {
+            $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+            "$Hash  $($_.Name)"
+          }
+          Set-Content -LiteralPath release\SHA256SUMS.txt -Value $Lines -Encoding ascii
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: implant-inventory-windows-${{ github.sha }}
+          path: |
+            release/ImplantInventory-Windows-x64.zip
+            release/InventoryServer-Windows-x64.zip
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows packages
+        uses: actions/download-artifact@v4
+        with:
+          name: implant-inventory-windows-${{ github.sha }}
+          path: release
+
+      - name: Choose release metadata
+        id: metadata
+        shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          short_sha="${COMMIT_SHA:0:7}"
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            echo "tag=$REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "name=Implant Inventory $REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=build-${RUN_NUMBER}-${short_sha}" >> "$GITHUB_OUTPUT"
+            echo "name=Implant Inventory build #${RUN_NUMBER} (${short_sha})" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish release with both applications
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.metadata.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.metadata.outputs.name }}
+          prerelease: ${{ steps.metadata.outputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            release/ImplantInventory-Windows-x64.zip
+            release/InventoryServer-Windows-x64.zip
+            release/SHA256SUMS.txt

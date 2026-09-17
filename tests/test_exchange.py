@@ -12,7 +12,8 @@ from uuid import uuid4
 from inventory.client import LocalStore, SyncEngine, Transport, RemoteError
 from inventory.core import Database
 from inventory.exchange import PROTOCOL, atomic_json, host_lock, read_json
-from inventory.server import FolderProcessor, configure
+from inventory.server import (FolderProcessor, configure, update_staff_choices,
+                              validate_export_settings)
 from inventory.settings import load_config, save_config
 from test_system import component, event
 
@@ -156,6 +157,65 @@ class ExchangeTests(unittest.TestCase):
         self.db.save_component(edited)
         self.assertTrue(self.db.save_component(edited)["duplicate"])
         self.assertEqual(next(c for c in self.db.snapshot()["inventory"] if c["ref_id"] == "SECOND")["revision"], 2)
+
+    def test_host_writes_complete_current_and_dated_csvs_on_inventory_change(self):
+        current = self.root / "dashboard" / "inventory.csv"
+        backups = self.root / "csv-backups"
+        saved = []
+        host = FolderProcessor(
+            self.db, str(self.root / "csv-exchange"), "host-csv",
+            export_settings={"inventory_csv_path": str(current),
+                             "csv_backup_directory": str(backups)},
+            save_export_settings=saved.append,
+        )
+        host.run_once()
+        first_backups = list(backups.glob("inventory-*.csv"))
+        self.assertTrue(current.exists())
+        self.assertEqual(len(first_backups), 1)
+        text = current.read_text(encoding="utf-8-sig")
+        self.assertIn("REF ID,Manufacturer,Implant type,Size,Component,Quantity,Reorder at,Reorder?", text)
+        self.assertIn("001.TEST", text)
+        host.run_once()
+        self.assertEqual(len(list(backups.glob("inventory-*.csv"))), 1)
+        self.db.apply(event(quantity=2), "Staff")
+        host.run_once()
+        self.assertEqual(len(list(backups.glob("inventory-*.csv"))), 2)
+        self.assertIn(",18,", current.read_text(encoding="utf-8-sig"))
+
+    def test_export_settings_are_host_persisted_and_exposed_in_snapshot(self):
+        saved = []
+        host = FolderProcessor(self.db, str(self.root / "settings-exchange"), "host-settings",
+                               save_export_settings=saved.append)
+        settings = {"inventory_csv_path": str(self.root / "current.csv"),
+                    "csv_backup_directory": str(self.root / "backups")}
+        result = host.handle("/export_settings", settings, "Test PC")
+        self.assertTrue(result["saved"])
+        self.assertEqual(saved, [settings])
+        self.assertEqual(host.snapshot()["export_settings"], settings)
+        with self.assertRaisesRegex(ValueError, r"\.csv"):
+            validate_export_settings({"inventory_csv_path": "inventory.xlsx"})
+
+    def test_staff_directories_add_remove_deduplicate_and_persist(self):
+        saved = []
+        host = FolderProcessor(self.db, str(self.root / "directory-exchange"), "host-directory",
+                               save_fields=saved.append)
+        added = host.handle("/staff_choices", {
+            "field": "referring_dentist", "action": "add",
+            "values": ["Dr. Jane Smith", " dr. jane smith ", "Dr. John Doe"],
+        }, "Test PC")
+        self.assertEqual(added["choices"], ["Dr. Jane Smith", "Dr. John Doe"])
+        self.assertEqual(saved[-1], host.fields)
+        removed = host.handle("/staff_choices", {
+            "field": "referring_dentist", "action": "remove",
+            "values": ["DR. JANE SMITH"],
+        }, "Test PC")
+        self.assertEqual(removed["choices"], ["Dr. John Doe"])
+        self.assertEqual(host.snapshot()["fields"], saved[-1])
+
+    def test_staff_directory_rejects_unmanaged_fields(self):
+        with self.assertRaises(ValueError):
+            update_staff_choices(self.host.fields, {
+                "field": "patient", "action": "add", "values": ["Not allowed"]})
 
     def test_stale_snapshot_does_not_roll_back_local_cache(self):
         store = LocalStore(self.root / "client.db")
