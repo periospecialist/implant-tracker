@@ -49,6 +49,41 @@ def matching_refs(components, query, limit=50):
     return (prefix + contains)[:limit]
 
 
+def matching_names(values, query, limit=50):
+    """Case-insensitive name lookup with REF-ID-style prefix prioritization."""
+    query = str(query or "").strip().casefold()
+    unique = {}
+    for value in values:
+        name = str(value).strip()
+        if name:
+            unique.setdefault(name.casefold(), name)
+    names = sorted(unique.values(), key=str.casefold)
+    if not query:
+        return names[:limit]
+    prefix = [name for name in names if name.casefold().startswith(query)]
+    contains = [name for name in names if query in name.casefold() and name not in prefix]
+    return (prefix + contains)[:limit]
+
+
+def csv_column_values(path, column_index):
+    """Read one selected CSV column and deduplicate names case-insensitively."""
+    values, seen = [], set()
+    with open(path, newline="", encoding="utf-8-sig") as stream:
+        rows = csv.reader(stream)
+        headers = next(rows, None)
+        if headers is None or not 0 <= column_index < len(headers):
+            raise ValueError("Choose a valid CSV column")
+        for row in rows:
+            if column_index >= len(row):
+                continue
+            name = " ".join(row[column_index].split())
+            identity = name.casefold()
+            if name and identity not in seen:
+                seen.add(identity)
+                values.append(name)
+    return values
+
+
 def inventory_cell_display(key, value, row):
     if key == "estimated_quantity" and isinstance(value, (int, float)) and value < 0:
         return f"🟨 ERROR: {value}"
@@ -88,11 +123,13 @@ def inventory_filter_matches(row, manufacturers, component_types, implant_types)
 class DataTable(ttk.Frame):
     """One reusable table with numeric sorting, AND filters, and filtered CSV export."""
     def __init__(self, parent, columns, row_style=None, cell_formatter=None,
-                 show_manual_filters=True, inventory_style=False, show_export=True):
+                 show_manual_filters=True, inventory_style=False, show_export=True,
+                 editable_columns=None):
         super().__init__(parent, padding=8)
         self.columns, self.rows, self.visible, self.filters = columns, [], [], {}
         self.row_style, self.cell_formatter = row_style, cell_formatter or (lambda key, value, row: display(value))
         self.predicate, self.preset_label = None, ""
+        self.editable_columns = editable_columns or {}
         self.sort_key, self.reverse = columns[0][0], False
         toolbar = ttk.Frame(self)
         if show_manual_filters or show_export:
@@ -136,6 +173,8 @@ class DataTable(ttk.Frame):
             for tree in (self.tree, self.reorder_tree):
                 tree.bind("<<TreeviewSelect>>", lambda event: self._sync_selection(event.widget))
         self.tree.grid(row=0, column=0, sticky="nsew")
+        if self.editable_columns:
+            self.tree.bind("<Double-Button-1>", self._begin_edit)
         vertical = ttk.Scrollbar(holder, orient="vertical", command=self._yview)
         vertical.grid(row=0, column=2 if inventory_style else 1, sticky="ns")
         horizontal = ttk.Scrollbar(holder, orient="horizontal", command=self.tree.xview)
@@ -149,6 +188,43 @@ class DataTable(ttk.Frame):
         self.tree.tag_configure("low", background="#fff2cf")
         self.tree.tag_configure("straumann", background="#e5f2ff", foreground="#163c61")
         self.tree.tag_configure("nobel", background="#f0e9ff", foreground="#463268")
+
+    def _begin_edit(self, event):
+        """Overlay an editor on an explicitly editable Treeview cell."""
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            return
+        item = self.tree.identify_row(event.y)
+        column_id = self.tree.identify_column(event.x)
+        displayed = [key for key, _ in self.columns if key != "reorder" or self.reorder_tree is None]
+        try:
+            key = displayed[int(column_id[1:]) - 1]
+            row = self.visible[int(item)]
+        except (ValueError, IndexError):
+            return
+        callback = self.editable_columns.get(key)
+        if callback is None:
+            return
+        bounds = self.tree.bbox(item, column_id)
+        if not bounds:
+            return
+        editor = ttk.Entry(self.tree)
+        editor.insert(0, display(row.get(key)))
+        editor.select_range(0, "end")
+        editor.place(x=bounds[0], y=bounds[1], width=bounds[2], height=bounds[3])
+        editor.focus_set()
+        finished = False
+        def finish(save):
+            nonlocal finished
+            if finished:
+                return
+            finished = True
+            value = editor.get().strip()
+            editor.destroy()
+            if save and value != display(row.get(key)):
+                callback(row, value)
+        editor.bind("<Return>", lambda _event: finish(True))
+        editor.bind("<Escape>", lambda _event: finish(False))
+        editor.bind("<FocusOut>", lambda _event: finish(True))
 
     def _yview(self, *args):
         self.tree.yview(*args)
@@ -476,6 +552,8 @@ class EntryForm(ttk.Frame):
         super().__init__(parent, padding=10)
         self.app, self.kind, self.fields = app, kind, fields
         self.variables, self.widgets = {}, {}
+        self.choice_fields = {field["key"]: list(field.get("choices", [])) for field in fields
+                              if field["key"] in ("periodontist", "referring_dentist", "assistant")}
         self.refs = []
         title = "Record component usage" if kind == "usage" else "Add components to stock"
         ttk.Label(self, text=title, style="Title.TLabel").pack(anchor="w")
@@ -517,6 +595,14 @@ class EntryForm(ttk.Frame):
                 widget.bind("<<ComboboxSelected>>", self.ref_selected)
                 widget.bind("<FocusOut>", self.normalize_exact_ref)
                 ttk.Button(form, text="Search / select", command=self.open_ref_search).grid(row=index, column=2, padx=(8, 0), pady=5)
+            elif key in self.choice_fields:
+                widget.bind("<KeyRelease>", lambda event, k=key: self.search_name(k, event))
+                widget.bind("<Return>", lambda event, k=key: self.accept_name_match(k))
+                widget.bind("<<ComboboxSelected>>", lambda _event, k=key: self.normalize_exact_name(k))
+                widget.bind("<FocusOut>", lambda _event, k=key: self.normalize_exact_name(k))
+                ttk.Button(form, text="Search / select",
+                           command=lambda k=key: self.open_name_search(k)).grid(
+                               row=index, column=2, padx=(8, 0), pady=5)
         self.description = ttk.Label(form, text="Start typing a REF ID to search inventory.",
                                      wraplength=760, padding=(12, 10), style="Lookup.TLabel")
         self.description.grid(row=len(base + fields), column=0, columnspan=3, sticky="ew", pady=15)
@@ -534,6 +620,76 @@ class EntryForm(ttk.Frame):
         self.filtered_refs = matching_refs(getattr(self, "components", {}), query)
         self.ref_widget["values"] = self.filtered_refs
         self.describe_ref()
+
+    def search_name(self, key, event=None):
+        if event is not None and event.keysym in ("Up", "Down", "Left", "Right", "Return", "Tab", "Escape"):
+            return
+        self.widgets[key]["values"] = matching_names(self.choice_fields[key], self.variables[key].get())
+
+    def accept_name_match(self, key):
+        query = self.variables[key].get().strip()
+        exact = next((name for name in self.choice_fields[key] if name.casefold() == query.casefold()), None)
+        matches = matching_names(self.choice_fields[key], query)
+        if exact:
+            self.variables[key].set(exact)
+        elif matches:
+            self.variables[key].set(matches[0])
+        else:
+            self.bell()
+        self.search_name(key)
+        self.widgets[key].icursor("end")
+        return "break"
+
+    def normalize_exact_name(self, key):
+        query = self.variables[key].get().strip()
+        exact = next((name for name in self.choice_fields[key] if name.casefold() == query.casefold()), None)
+        if exact:
+            self.variables[key].set(exact)
+        self.search_name(key)
+
+    def open_name_search(self, key):
+        field = next(field for field in self.fields if field["key"] == key)
+        window = tk.Toplevel(self)
+        window.title("Search " + field["label"])
+        window.transient(self.winfo_toplevel())
+        window.geometry("620x420")
+        container = ttk.Frame(window, padding=14)
+        container.pack(fill="both", expand=True)
+        ttk.Label(container, text="Type any part of the name", style="Title.TLabel").pack(anchor="w")
+        query = tk.StringVar(value=self.variables[key].get().strip())
+        search = ttk.Entry(container, textvariable=query, width=42)
+        search.pack(fill="x", pady=(8, 10))
+        results = tk.Listbox(container, font=("Segoe UI", 12), activestyle="dotbox", exportselection=False)
+        results.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=results.yview)
+        scrollbar.pack(side="right", fill="y")
+        results.configure(yscrollcommand=scrollbar.set)
+        names = []
+        def refresh(*_):
+            nonlocal names
+            names = matching_names(self.choice_fields[key], query.get(), limit=500)
+            results.delete(0, "end")
+            for name in names:
+                results.insert("end", name)
+            if names:
+                results.selection_set(0)
+                results.activate(0)
+        def choose(event=None):
+            selected = results.curselection()
+            if not selected:
+                self.bell()
+                return "break"
+            self.variables[key].set(names[selected[0]])
+            self.search_name(key)
+            window.destroy()
+            self.widgets[key].focus_set()
+            return "break"
+        query.trace_add("write", refresh)
+        search.bind("<Return>", choose)
+        results.bind("<Return>", choose)
+        results.bind("<Double-Button-1>", choose)
+        refresh()
+        search.focus_set()
 
     def open_ref_search(self):
         self.search_refs()
@@ -715,7 +871,8 @@ class App(tk.Tk):
         ttk.Button(controls, text="Edit selected component", command=lambda: self.component_editor(self.inventory.selected())).pack(side="right", padx=5)
         self.inventory = DataTable(inventory_frame, INVENTORY_COLUMNS, row_style=inventory_row_style,
                                    cell_formatter=inventory_cell_display, show_manual_filters=False,
-                                   inventory_style=True, show_export=False)
+                                   inventory_style=True, show_export=False,
+                                   editable_columns={"reorder_level": self.update_reorder_level})
         self.inventory_filters = InventoryFilters(inventory_frame, self.inventory)
         self.inventory_filters.pack(fill="x", padx=4, pady=(4, 0))
         self.inventory.pack(fill="both", expand=True)
@@ -742,9 +899,9 @@ class App(tk.Tk):
         self.pending.pack(fill="both", expand=True)
         self.setup_tab()
         self.protocol("WM_DELETE_WINDOW", self.close)
-        self.after(100, self.poll)
-        self.after(300, self.start_sync)
-        self.after(self.config["sync_seconds"] * 1000, self.periodic)
+        self.poll_after = self.after(100, self.poll)
+        self.initial_sync_after = self.after(300, self.start_sync)
+        self.periodic_after = self.after(self.config["sync_seconds"] * 1000, self.periodic)
         self.refresh()
 
     def change_appearance(self, event=None):
@@ -774,12 +931,12 @@ class App(tk.Tk):
         except queue.Empty:
             pass
         if not self.closing:
-            self.after(100, self.poll)
+            self.poll_after = self.after(100, self.poll)
 
     def periodic(self):
         self.start_sync()
         if not self.closing:
-            self.after(self.config["sync_seconds"] * 1000, self.periodic)
+            self.periodic_after = self.after(self.config["sync_seconds"] * 1000, self.periodic)
 
     def start_sync(self):
         if self.syncing or self.closing:
@@ -790,6 +947,11 @@ class App(tk.Tk):
             self.syncing, self.online = False, True
             self.status.configure(text=f"Folder sync ready • Host: {snapshot.get('host_computer', 'inventory computer')}")
             self.connection_message.configure(text="Exchange folder connected. Entries are processed while the host is running.")
+            if hasattr(self, "export_vars"):
+                settings = snapshot.get("export_settings", {})
+                for key, variable in self.export_vars.items():
+                    if not variable.get():
+                        variable.set(settings.get(key, ""))
             if snapshot.get("fields") != self.fields:
                 self.fields = snapshot["fields"]
                 for index, kind in enumerate(("usage", "addition")):
@@ -876,8 +1038,17 @@ class App(tk.Tk):
         self.background(remove, success, failure)
 
     def setup_tab(self):
-        setup = ttk.Frame(self.notebook, padding=22)
-        self.notebook.add(setup, text="Setup")
+        setup_tab = ttk.Frame(self.notebook)
+        self.notebook.add(setup_tab, text="Setup")
+        canvas = tk.Canvas(setup_tab, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(setup_tab, orient="vertical", command=canvas.yview)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(fill="both", expand=True)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        setup = ttk.Frame(canvas, padding=22)
+        content = canvas.create_window((0, 0), window=setup, anchor="nw")
+        setup.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(content, width=event.width))
         ttk.Label(setup, text="Shared-folder setup", style="Title.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 15))
         self.connection_vars = {}
         for index, (key, label) in enumerate((("exchange_folder", "Inventory Exchange folder"),), 1):
@@ -893,11 +1064,32 @@ class App(tk.Tk):
         ttk.Button(setup, text="Save folder and sync", command=self.save_connection).grid(row=4, column=1, sticky="w", pady=12)
         self.connection_message = ttk.Label(setup, text="Select the same shared folder on every computer, such as \\\\SERVER\\Perio\\IMPLANTS\\Inventory Exchange. No login or access key is needed.", wraplength=850)
         self.connection_message.grid(row=5, column=0, columnspan=2, sticky="w", pady=8)
-        ttk.Separator(setup).grid(row=6, column=0, columnspan=2, sticky="ew", pady=20)
-        ttk.Label(setup, text="Opening inventory and Excel migration", style="Title.TLabel").grid(row=7, column=0, columnspan=2, sticky="w")
-        ttk.Label(setup, text="Import starting quantities and existing history into an empty database while the host is running.\nChoose a verified opening balance date. Entries on/before that date are archived; later entries change stock.", wraplength=850).grid(row=8, column=0, columnspan=2, sticky="w", pady=12)
-        ttk.Button(setup, text="Open Excel import…", command=self.import_dialog).grid(row=9, column=0, columnspan=2, sticky="w")
-        ttk.Label(setup, text="Form fields, required fields and staff dropdowns are managed centrally in server.json.\nManufacturer, implant type and component choices can be extended in client.json.\nWindows keeps the local queue and cache encrypted for the current Windows user.", wraplength=850).grid(row=10, column=0, columnspan=2, sticky="w", pady=30)
+        ttk.Separator(setup).grid(row=6, column=0, columnspan=3, sticky="ew", pady=20)
+        ttk.Label(setup, text="Automatic inventory CSV exports", style="Title.TLabel").grid(row=7, column=0, columnspan=2, sticky="w")
+        ttk.Label(setup, text="These settings are stored and executed only by the inventory host. The current file is replaced whenever inventory changes; the backup folder receives a separate dated CSV.", wraplength=850).grid(row=8, column=0, columnspan=3, sticky="w", pady=(6, 10))
+        self.export_vars = {
+            "inventory_csv_path": tk.StringVar(),
+            "csv_backup_directory": tk.StringVar(),
+        }
+        ttk.Label(setup, text="Current inventory CSV file").grid(row=9, column=0, sticky="w", pady=7, padx=(0, 20))
+        ttk.Entry(setup, textvariable=self.export_vars["inventory_csv_path"], width=66).grid(row=9, column=1, sticky="ew", pady=7)
+        ttk.Button(setup, text="Browse…", command=self.browse_inventory_csv).grid(row=9, column=2, padx=8)
+        ttk.Label(setup, text="Dated CSV backup folder").grid(row=10, column=0, sticky="w", pady=7, padx=(0, 20))
+        ttk.Entry(setup, textvariable=self.export_vars["csv_backup_directory"], width=66).grid(row=10, column=1, sticky="ew", pady=7)
+        ttk.Button(setup, text="Browse…", command=self.browse_csv_backup_folder).grid(row=10, column=2, padx=8)
+        ttk.Button(setup, text="Save host export settings", command=self.save_export_settings).grid(row=11, column=1, sticky="w", pady=10)
+        self.export_message = ttk.Label(setup, text="Leave either field blank to disable that export.", wraplength=850)
+        self.export_message.grid(row=12, column=0, columnspan=3, sticky="w")
+        ttk.Separator(setup).grid(row=13, column=0, columnspan=3, sticky="ew", pady=20)
+        ttk.Label(setup, text="Clinical name directories", style="Title.TLabel").grid(row=14, column=0, columnspan=2, sticky="w")
+        ttk.Label(setup, text="Add or remove Periodontists, Referring Dentists, and Assistants. Referring Dentists can also be imported from a selected CSV column.", wraplength=850).grid(row=15, column=0, columnspan=3, sticky="w", pady=(6, 10))
+        ttk.Button(setup, text="Manage names…", command=self.staff_directory_dialog).grid(row=16, column=0, columnspan=2, sticky="w")
+        ttk.Separator(setup).grid(row=17, column=0, columnspan=3, sticky="ew", pady=20)
+        ttk.Label(setup, text="Opening inventory and Excel migration", style="Title.TLabel").grid(row=18, column=0, columnspan=2, sticky="w")
+        ttk.Label(setup, text="Import starting quantities and existing history into an empty database while the host is running.\nChoose a verified opening balance date. Entries on/before that date are archived; later entries change stock.", wraplength=850).grid(row=19, column=0, columnspan=2, sticky="w", pady=12)
+        ttk.Button(setup, text="Open Excel import…", command=self.import_dialog).grid(row=20, column=0, columnspan=2, sticky="w")
+        ttk.Label(setup, text="Form fields, required fields and staff dropdowns are managed centrally in server.json.\nManufacturer, implant type and component choices can be extended in client.json.\nWindows keeps the local queue and cache encrypted for the current Windows user.", wraplength=850).grid(row=21, column=0, columnspan=2, sticky="w", pady=30)
+        setup.columnconfigure(1, weight=1)
 
     def save_connection(self):
         if self.syncing:
@@ -915,6 +1107,156 @@ class App(tk.Tk):
             self.start_sync()
         except Exception as error:
             messagebox.showerror("Invalid settings", str(error), parent=self)
+
+    def browse_inventory_csv(self):
+        path = filedialog.asksaveasfilename(parent=self, title="Choose the automatic inventory CSV",
+                                            defaultextension=".csv", filetypes=[("CSV", "*.csv")])
+        if path:
+            self.export_vars["inventory_csv_path"].set(path)
+
+    def browse_csv_backup_folder(self):
+        path = filedialog.askdirectory(parent=self, title="Choose the dated CSV backup folder")
+        if path:
+            self.export_vars["csv_backup_directory"].set(path)
+
+    def save_export_settings(self):
+        settings = {key: variable.get().strip() for key, variable in self.export_vars.items()}
+        self.export_message.configure(text="Saving settings on the inventory host…")
+        def success(result):
+            message = ("Host export settings saved. A CSV is written whenever inventory changes."
+                       if not result.get("warning") else
+                       "Settings saved, but the first export failed. The host will retry: " + result["warning"])
+            self.export_message.configure(text=message)
+            for key in self.export_vars:
+                self.export_vars[key].set(result.get(key, ""))
+        def failure(error):
+            self.export_message.configure(text="Host export settings were not saved.")
+            messagebox.showerror("Export settings failed", str(error), parent=self)
+        self.background(lambda: self.engine.transport.post("/export_settings", settings), success, failure)
+
+    def update_reorder_level(self, row, value):
+        try:
+            level = integer(value)
+        except Exception as error:
+            return messagebox.showerror("Invalid reorder level", str(error), parent=self)
+        data = {key: row.get(key, "") for key in COMPONENT_FIELDS}
+        data.update(ref_id=row["ref_id"], reorder_level=level, revision=row["revision"])
+        self.status.configure(text=f"Saving reorder level for {row['ref_id']}…")
+        def success(_result):
+            self.status.configure(text=f"Reorder level saved for {row['ref_id']}")
+            self.start_sync()
+        def failure(error):
+            self.status.configure(text="Could not save reorder level")
+            messagebox.showerror("Reorder level not saved", str(error), parent=self)
+        self.background(lambda: self.engine.transport.post("/components", data), success, failure)
+
+    def staff_directory_dialog(self):
+        window = tk.Toplevel(self)
+        window.title("Manage clinical name directories")
+        window.transient(self)
+        window.geometry("760x560")
+        container = ttk.Frame(window, padding=15)
+        container.pack(fill="both", expand=True)
+        ttk.Label(container, text="Clinical name directories", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(container, text="Changes are saved on the inventory host and appear on every computer after sync.",
+                  style="Muted.TLabel").pack(anchor="w", pady=(4, 10))
+        tabs = ttk.Notebook(container)
+        tabs.pack(fill="both", expand=True)
+        labels = {"periodontist": "Periodontists", "referring_dentist": "Referring Dentists",
+                  "assistant": "Assistants"}
+        definitions = {field["key"]: field for field in self.fields.get("usage", [])}
+        lists, entries, notices = {}, {}, {}
+
+        def fill(key, choices):
+            widget = lists[key]
+            widget.delete(0, "end")
+            for name in sorted(choices, key=str.casefold):
+                widget.insert("end", name)
+
+        def apply_result(key, result):
+            fill(key, result["choices"])
+            notices[key].configure(text=f"Saved {len(result['choices'])} names on the host.")
+            entries[key].delete(0, "end")
+            self.start_sync()
+
+        def change(key, action, values):
+            values = [value for value in values if value.strip()]
+            if not values:
+                return
+            notices[key].configure(text="Saving on the inventory host…")
+            def failure(error):
+                notices[key].configure(text="Change was not saved.")
+                messagebox.showerror("Directory change failed", str(error), parent=window)
+            self.background(
+                lambda: self.engine.transport.post(
+                    "/staff_choices", {"field": key, "action": action, "values": values}),
+                lambda result: apply_result(key, result), failure)
+
+        for key in ("periodontist", "referring_dentist", "assistant"):
+            frame = ttk.Frame(tabs, padding=12)
+            tabs.add(frame, text=labels[key])
+            frame.columnconfigure(0, weight=1)
+            frame.rowconfigure(0, weight=1)
+            listbox = tk.Listbox(frame, selectmode="extended", exportselection=False,
+                                 font=("Segoe UI", 11))
+            listbox.grid(row=0, column=0, sticky="nsew")
+            scroll = ttk.Scrollbar(frame, orient="vertical", command=listbox.yview)
+            scroll.grid(row=0, column=1, sticky="ns")
+            listbox.configure(yscrollcommand=scroll.set)
+            lists[key] = listbox
+            entry = ttk.Entry(frame)
+            entry.grid(row=1, column=0, sticky="ew", pady=(10, 4))
+            entries[key] = entry
+            actions = ttk.Frame(frame)
+            actions.grid(row=2, column=0, columnspan=2, sticky="ew")
+            ttk.Button(actions, text="Add name",
+                       command=lambda k=key: change(k, "add", [entries[k].get()])).pack(side="left")
+            ttk.Button(actions, text="Remove selected",
+                       command=lambda k=key: change(
+                           k, "remove", [lists[k].get(i) for i in lists[k].curselection()])).pack(
+                               side="left", padx=6)
+            if key == "referring_dentist":
+                ttk.Button(actions, text="Import from CSV…",
+                           command=lambda: self.import_referring_dentists(window, change)).pack(side="right")
+            notice = ttk.Label(frame, text="", style="Muted.TLabel")
+            notice.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+            notices[key] = notice
+            fill(key, definitions.get(key, {}).get("choices", []))
+            entry.bind("<Return>", lambda _event, k=key: change(k, "add", [entries[k].get()]))
+
+    def import_referring_dentists(self, parent, change):
+        path = filedialog.askopenfilename(parent=parent, title="Choose a referring dentist CSV",
+                                          filetypes=[("CSV", "*.csv"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, newline="", encoding="utf-8-sig") as stream:
+                headers = next(csv.reader(stream), None)
+            if not headers:
+                raise ValueError("The CSV does not contain a header row")
+        except (OSError, UnicodeError, csv.Error, ValueError) as error:
+            return messagebox.showerror("CSV could not be opened", str(error), parent=parent)
+        chooser = tk.Toplevel(parent)
+        chooser.title("Select the Referring Dentist column")
+        chooser.transient(parent)
+        form = ttk.Frame(chooser, padding=18)
+        form.pack(fill="both", expand=True)
+        ttk.Label(form, text="Which column contains the Referring Dentist?",
+                  style="Title.TLabel").pack(anchor="w")
+        column = ttk.Combobox(form, values=headers, state="readonly", width=48)
+        column.pack(fill="x", pady=12)
+        column.current(0)
+        ttk.Label(form, text="Blank cells and matching names are automatically skipped.",
+                  style="Muted.TLabel").pack(anchor="w")
+        def import_selected():
+            try:
+                values = csv_column_values(path, column.current())
+            except (OSError, UnicodeError, csv.Error, ValueError) as error:
+                return messagebox.showerror("CSV import failed", str(error), parent=chooser)
+            chooser.destroy()
+            change("referring_dentist", "add", values)
+        ttk.Button(form, text="Import selected column", style="Accent.TButton",
+                   command=import_selected).pack(anchor="e", pady=(18, 0))
 
     def component_editor(self, row=None):
         window = tk.Toplevel(self)
@@ -1032,6 +1374,14 @@ class App(tk.Tk):
 
     def close(self):
         self.closing = True
+        for callback in (getattr(self, "poll_after", None),
+                         getattr(self, "initial_sync_after", None),
+                         getattr(self, "periodic_after", None)):
+            if callback:
+                try:
+                    self.after_cancel(callback)
+                except tk.TclError:
+                    pass  # The callback may already have run.
         self.destroy()  # Every entry was committed before the form displayed 'saved'.
 
 

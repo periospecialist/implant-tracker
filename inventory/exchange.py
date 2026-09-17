@@ -128,7 +128,8 @@ class SharedFolderTransport:
                 if snapshot.get("host_id") != owner["host_id"] or age > 45 or age < -120:
                     raise RemoteError("The host has not published a recent inventory snapshot. Keep the host open and check the computers' clocks.")
                 return {**snapshot, "receipts": []}
-            if operation not in ("/events", "/components", "/import", "/snapshot", "/delete_usage"):
+            if operation not in ("/events", "/components", "/import", "/snapshot", "/delete_usage",
+                                  "/export_settings", "/staff_choices"):
                 raise RemoteError("Unknown exchange operation")
             key = encoded([operation, data])
             identity = self.inflight.setdefault(key, uuid4().hex)

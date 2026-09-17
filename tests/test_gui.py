@@ -114,6 +114,11 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(filters.labels["implant_type"].grid_info()["row"], 1)
         self.assertEqual(filters.export_button.grid_info()["row"], 1)
         dropdown = filters.buttons["implant_type"]
+        # A transient Toplevel cannot become visible on Windows while its parent
+        # is withdrawn. Show the test root before asserting native popup state.
+        self.app.deiconify()
+        self.app.notebook.select(filters.master)
+        self.app.update()
         dropdown.show()
         self.app.update()
         implant_choice = next(widget for widget in dropdown.panel.winfo_children()

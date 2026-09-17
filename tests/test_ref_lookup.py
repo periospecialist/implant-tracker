@@ -1,6 +1,9 @@
+import csv
+from pathlib import Path
+import tempfile
 import unittest
 
-from inventory.desktop import component_name, matching_refs
+from inventory.desktop import csv_column_values, component_name, matching_names, matching_refs
 
 
 COMPONENTS = {
@@ -11,6 +14,21 @@ COMPONENTS = {
 
 
 class RefLookupTests(unittest.TestCase):
+    def test_name_search_prioritizes_prefix_then_contains(self):
+        names = ["Dr. Maria Chen", "Chen Dental", "Dr. Chen Lee", "Other"]
+        self.assertEqual(matching_names(names, "chen"),
+                         ["Chen Dental", "Dr. Chen Lee", "Dr. Maria Chen"])
+
+    def test_csv_column_import_deduplicates_names_case_insensitively(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "dentists.csv"
+            with path.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["Office", "Referring Dentist"])
+                writer.writerows([["A", "Dr. Jane Smith"], ["B", " dr. jane smith "],
+                                  ["C", "Dr. John Doe"], ["D", ""]])
+            self.assertEqual(csv_column_values(path, 1), ["Dr. Jane Smith", "Dr. John Doe"])
+
     def test_search_is_case_insensitive_and_matches_inside_ref(self):
         self.assertEqual(matching_refs(COMPONENTS, "s"), ["035.8010S"])
         self.assertEqual(matching_refs(COMPONENTS, "351"), ["021.3510"])
