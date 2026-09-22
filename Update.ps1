@@ -10,8 +10,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Source = [IO.Path]::GetFullPath($Source)
-$Destination = [IO.Path]::GetFullPath($Destination)
+$Source = [IO.Path]::GetFullPath($Source.Trim().Trim('"'))
+$Destination = [IO.Path]::GetFullPath($Destination.Trim().Trim('"'))
 if (-not (Test-Path -LiteralPath (Join-Path $Source 'ImplantInventory.exe'))) {
     throw "The update source is incomplete: $Source"
 }
