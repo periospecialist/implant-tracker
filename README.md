@@ -135,9 +135,9 @@ Edit `fields.usage` and `fields.addition` in the host's `server.json`, then rest
 
 Keep stable field keys. New custom keys such as `lot_number` are stored in `extra` and shown in history. Date, REF ID, and quantity remain required. Adding required fields while PCs are offline can make their older queued entries require attention at sync. Manufacturer, implant type, and component dropdown suggestions are configurable in `client.json`; see `examples/client.example.json`.
 
-## Initial Excel migration
+## Excel migration
 
-Skip this if your existing database is already initialized. For a new database, review `WORKBOOK_REVIEW.md` and preserve the original workbooks.
+For a new database, review `WORKBOOK_REVIEW.md` and preserve the original workbooks. If the previous Excel migration was incorrect, the same screen can replace it without deleting normal inventory activity entered afterward.
 
 1. Select **Setup → Open Excel import**.
 2. Choose the dashboard workbook and the standalone supply log workbook. The default mapping reads Base Supply at header row 4, reorder levels from Inventory Full Supply at header row 5, and Component Change Log at header row 5.
@@ -145,9 +145,13 @@ Skip this if your existing database is already initialized. For a new database, 
 4. Preview the validation report, projected quantities, and history. Reconcile the negative starting quantity for REF ID **36645**, and review the flagged identical log entries.
 5. Check the verification box and import. An invalid import rolls back completely; a repeated successful bundle does not duplicate history.
 
+To correct a completed migration, preview the corrected workbooks and select **Replace the previous Excel migration** before importing. Confirm the warning to remove the old imported opening inventory and imported history, install the corrected migration, and recalculate quantities. Entries created normally in the application are preserved and reapplied to the corrected opening balances.
+
+Every imported REF ID with normal activity must remain in the corrected workbook. The replacement is blocked if a removed imported REF ID has normal activity, if the corrected workbook conflicts with a manually created component, or if a normal correction refers to imported history. Fix the reported conflict and preview again; a failed replacement rolls back completely.
+
 Entries on/before the cutoff are retained as history and do not change the opening balance. Later entries change stock. Zero-quantity rows are reported and omitted. Identical source rows are preserved and flagged, not silently deleted. Unknown references and invalid opening quantities block the import. Ref IDs are uppercased while preserving leading zeros and punctuation. No Excel macro is executed.
 
-For other layouts or a current-count snapshot, customize `examples/import-profile.json`. Initial import requires an empty database; it does not overwrite an existing inventory. Normal desktop entries must be after the opening date and no later than today.
+For other layouts or a current-count snapshot, customize `examples/import-profile.json`. The first import requires an empty database. Later imports require the explicit replacement checkbox and replace only data from the previous Excel migration; they do not erase normal application entries. Normal desktop entries must be after the opening date and no later than today.
 
 ## Backups and recovery
 

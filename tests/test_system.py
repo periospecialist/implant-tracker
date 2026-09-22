@@ -146,6 +146,64 @@ class DatabaseTests(BaseTest):
         with self.assertRaises(ValidationError):
             self.db.import_bundle({**bundle, "events": [old]}, "Admin")
 
+    def test_replace_migration_removes_old_import_and_preserves_normal_entries(self):
+        old_import = event(quantity=2)
+        first = {"version": 1, "cutoff": CUTOFF, "components": [component(20)],
+                 "events": [old_import]}
+        self.db.import_bundle(first, "Admin")
+        normal_addition = event(kind="addition", quantity=3)
+        self.db.apply(normal_addition, "Staff")
+
+        corrected_component = {**component(30), "manufacturer": "Corrected"}
+        corrected_import = event(quantity=1)
+        result = self.db.import_bundle({
+            "version": 1,
+            "cutoff": CUTOFF,
+            "components": [corrected_component],
+            "events": [corrected_import],
+            "replace_existing_migration": True,
+        }, "Admin")
+
+        self.assertTrue(result["replaced"])
+        snapshot = self.db.snapshot()
+        self.assertEqual(snapshot["inventory"][0]["manufacturer"], "Corrected")
+        self.assertEqual(snapshot["inventory"][0]["opening_quantity"], 30)
+        self.assertEqual(snapshot["inventory"][0]["quantity"], 32)
+        self.assertEqual(snapshot["totals"], {"usage": 1, "addition": 1})
+        identities = {row["id"] for rows in snapshot["logs"].values() for row in rows}
+        self.assertNotIn(old_import["id"], identities)
+        self.assertIn(corrected_import["id"], identities)
+        self.assertIn(normal_addition["id"], identities)
+
+    def test_replace_migration_removes_unused_old_components(self):
+        old_component = {**component(4), "ref_id": "002.OLD"}
+        self.db.import_bundle({
+            "version": 1, "cutoff": CUTOFF,
+            "components": [component(), old_component], "events": [],
+        }, "Admin")
+        self.db.import_bundle({
+            "version": 1, "cutoff": CUTOFF,
+            "components": [component(25)], "events": [],
+            "replace_existing_migration": True,
+        }, "Admin")
+        self.assertEqual([row["ref_id"] for row in self.db.snapshot()["inventory"]], ["001.TEST"])
+
+    def test_replace_migration_blocks_removing_component_with_normal_activity(self):
+        old_component = {**component(4), "ref_id": "002.OLD"}
+        self.db.import_bundle({
+            "version": 1, "cutoff": CUTOFF,
+            "components": [component(), old_component], "events": [],
+        }, "Admin")
+        self.db.apply(event(ref_id="002.OLD"), "Staff")
+
+        with self.assertRaisesRegex(ValidationError, "002.OLD.*normal activity"):
+            self.db.import_bundle({
+                "version": 1, "cutoff": CUTOFF,
+                "components": [component(25)], "events": [],
+                "replace_existing_migration": True,
+            }, "Admin")
+        self.assertEqual(len(self.db.snapshot()["inventory"]), 2)
+
     def test_failed_import_rolls_back_everything(self):
         bundle = {"version": 1, "cutoff": CUTOFF, "components": [component()],
                   "events": [event(), event(ref_id="DOES-NOT-EXIST")]}

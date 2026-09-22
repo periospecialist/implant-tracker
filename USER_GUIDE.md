@@ -20,11 +20,24 @@ The host is the one Windows computer that stays on and owns the live database.
 1. Download `InventoryServer-Windows.zip` from the [latest release](https://github.com/periospecialist/implant-tracker/releases/latest) and extract it.
 2. Close the existing **Inventory Host** console with **Ctrl+C** if this is an update.
 3. Double-click `SETUP_HOST.cmd`.
-4. For an update, select the existing `server.json`. Do not create a new configuration or re-import Excel.
+4. For an update, select the existing `server.json`. Do not create a new configuration or re-import Excel unless you are deliberately correcting the previous migration as described below.
 5. Enter the same Inventory Exchange shared-folder path used by every desktop.
 6. Allow the setup to make its upgrade backup. Start the host and confirm that desktops show **Folder sync ready**.
 
 The host ZIP and desktop ZIP are separate. Installing a desktop update does not update the host.
+
+## Correct a previous Excel migration
+
+Use this only when the opening inventory or history imported from Excel was incorrect. It replaces data created by the previous Excel migration while preserving entries staff created normally in the application.
+
+1. Preserve the original and corrected workbooks, and make a current host backup.
+2. In the desktop app, select **Setup → Open Excel import** and choose the corrected workbooks.
+3. Enter and verify the end-of-day opening date, then select **Preview and validate**.
+4. Review the opening quantities, projected quantities, history, and every warning.
+5. Select **Replace the previous Excel migration**, check the opening-inventory verification box, and choose **Import reviewed data**.
+6. Read and confirm the replacement warning. When it finishes, compare several REF IDs and recent normal entries with your records.
+
+The replacement removes the previous imported opening inventory and imported history, then recalculates stock from the corrected migration plus normal application entries. It does not remove normal additions or usages. If a REF ID has normal activity, keep that REF ID in the corrected workbook. Conflicts block the replacement and leave the existing database unchanged.
 
 ## Update a desktop
 

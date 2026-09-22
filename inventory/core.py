@@ -62,6 +62,7 @@ DETAIL_FIELDS = ("tooth", "placement", "patient", "periodontist", "referring_den
                  "assistant", "signed_by", "notes")
 COMPONENT_FIELDS = ("manufacturer", "implant_type", "size", "component_type", "other_parts")
 TABLES = {"usage": "component_usage_log", "addition": "component_addition_log"}
+MIGRATION_ACTOR_PREFIX = "Excel import on "
 
 
 def normalize_event(data):
@@ -268,20 +269,109 @@ class Database:
         events = bundle.get("events", [])
         if not components or len(components) > 10000 or len(events) > 100000:
             raise ValidationError("Import requires 1–10,000 components and at most 100,000 entries")
-        batch = digest(bundle)
+        replace_existing = bundle.get("replace_existing_migration") is True
+        batch = digest({key: value for key, value in bundle.items()
+                        if key != "replace_existing_migration"})
         with self.connect(write=True) as db:
-            existing = db.execute("SELECT import_batch FROM component_list").fetchall()
+            existing = db.execute("SELECT ref_id,import_batch FROM component_list").fetchall()
             if existing:
-                if any(r[0] == batch for r in existing):
+                if any(r["import_batch"] == batch for r in existing) and not replace_existing:
                     return {"already_imported": True}
-                raise ValidationError("Initial migration requires an empty database; this database already contains components")
-            for component in components:
-                self._insert_component(db, normalize_component(component),
-                                       integer(component.get("opening_quantity")), cutoff, batch)
+                if not replace_existing:
+                    raise ValidationError("Initial migration requires an empty database; choose Replace previous Excel migration to import again")
+                self._replace_migration(db, components, cutoff, batch)
+            else:
+                for component in components:
+                    self._insert_component(db, normalize_component(component),
+                                           integer(component.get("opening_quantity")), cutoff, batch)
+            migration_actor = actor if str(actor).startswith(MIGRATION_ACTOR_PREFIX) \
+                else MIGRATION_ACTOR_PREFIX + str(actor)
             for data in events:
                 event = normalize_event(data)
-                self._apply(db, event, actor, historical=event["date"] <= cutoff)
-        return {"components": len(components), "events": len(events), "already_imported": False}
+                self._apply(db, event, migration_actor, historical=event["date"] <= cutoff)
+            if replace_existing:
+                self._recalculate_quantities(db)
+        return {"components": len(components), "events": len(events),
+                "already_imported": False, "replaced": replace_existing}
+
+    def _replace_migration(self, db, components, cutoff, batch):
+        """Replace rows created by a prior Excel import while retaining normal activity."""
+        imported = {row["ref_id"]: row for row in db.execute(
+            "SELECT * FROM component_list WHERE import_batch<>''")}
+        if not imported:
+            raise ValidationError("There is no previous Excel migration to replace")
+
+        prepared = {}
+        for source in components:
+            component = normalize_component(source)
+            identity = component["ref_id"]
+            if identity in prepared:
+                raise ValidationError(f"Migration contains duplicate REF ID {identity}")
+            prepared[identity] = (component, integer(source.get("opening_quantity")))
+
+        manual_refs = {row["ref_id"] for row in db.execute(
+            "SELECT ref_id FROM component_list WHERE import_batch='' ")}
+        conflicts = sorted(manual_refs.intersection(prepared))
+        if conflicts:
+            sample = ", ".join(conflicts[:5])
+            raise ValidationError(f"Replacement would overwrite manually created component(s): {sample}")
+
+        actor_pattern = MIGRATION_ACTOR_PREFIX + "%"
+        for table in TABLES.values():
+            for row in db.execute(
+                f"SELECT reversal_of FROM {table} WHERE actor NOT LIKE ? AND reversal_of<>''",
+                (actor_pattern,),
+            ):
+                original = self._find(db, row["reversal_of"])
+                if original and original["actor"].startswith(MIGRATION_ACTOR_PREFIX):
+                    raise ValidationError(
+                        "A normal correction refers to imported history; remove that correction before replacing the migration"
+                    )
+
+        removed_refs = set(imported).difference(prepared)
+        for identity in sorted(removed_refs):
+            used = any(db.execute(
+                f"SELECT 1 FROM {table} WHERE ref_id=? AND actor NOT LIKE ? LIMIT 1",
+                (identity, actor_pattern),
+            ).fetchone() for table in TABLES.values())
+            if used:
+                raise ValidationError(
+                    f"REF ID {identity} is missing from the new workbook but has normal activity; include it before replacing the migration"
+                )
+
+        for table in TABLES.values():
+            db.execute(f"DELETE FROM {table} WHERE actor LIKE ?", (actor_pattern,))
+
+        for identity in removed_refs:
+            db.execute("DELETE FROM inventory_supply WHERE ref_id=?", (identity,))
+            db.execute("DELETE FROM component_list WHERE ref_id=?", (identity,))
+
+        for identity, (component, opening) in prepared.items():
+            if identity in imported:
+                columns = [key for key in component if key != "ref_id"]
+                db.execute(
+                    f"UPDATE component_list SET {','.join(key+'=?' for key in columns)}, "
+                    "revision=revision+1, import_batch=? WHERE ref_id=?",
+                    [component[key] for key in columns] + [batch, identity],
+                )
+                db.execute(
+                    "UPDATE inventory_supply SET opening_quantity=?,opening_date=?,quantity=? WHERE ref_id=?",
+                    (opening, cutoff, opening, identity),
+                )
+            else:
+                self._insert_component(db, component, opening, cutoff, batch)
+
+    def _recalculate_quantities(self, db):
+        db.execute("""
+            UPDATE inventory_supply
+            SET quantity = opening_quantity
+                + COALESCE((SELECT SUM(quantity) FROM component_addition_log
+                            WHERE component_addition_log.ref_id=inventory_supply.ref_id
+                              AND affects_stock=1), 0)
+                - COALESCE((SELECT SUM(quantity) FROM component_usage_log
+                            WHERE component_usage_log.ref_id=inventory_supply.ref_id
+                              AND affects_stock=1), 0)
+        """)
 
     def snapshot(self, known_ids=(), history_limit=2000):
         if len(known_ids) > 1000:

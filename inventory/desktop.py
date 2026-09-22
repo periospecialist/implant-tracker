@@ -1099,7 +1099,7 @@ class App(tk.Tk):
                   wraplength=850).grid(row=21, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Separator(setup).grid(row=22, column=0, columnspan=3, sticky="ew", pady=20)
         ttk.Label(setup, text="Opening inventory and Excel migration", style="Title.TLabel").grid(row=23, column=0, columnspan=2, sticky="w")
-        ttk.Label(setup, text="Import starting quantities and existing history into an empty database while the host is running.\nChoose a verified opening balance date. Entries on/before that date are archived; later entries change stock.", wraplength=850).grid(row=24, column=0, columnspan=2, sticky="w", pady=12)
+        ttk.Label(setup, text="Import starting quantities and existing history while the host is running. A later import can explicitly replace the previous Excel migration.\nChoose a verified opening balance date. Entries on/before that date are archived; later entries change stock.", wraplength=850).grid(row=24, column=0, columnspan=2, sticky="w", pady=12)
         ttk.Button(setup, text="Open Excel import…", command=self.import_dialog).grid(row=25, column=0, columnspan=2, sticky="w")
         ttk.Label(setup, text="Form fields, required fields and staff dropdowns are managed centrally in server.json.\nManufacturer, implant type and component choices can be extended in client.json.\nWindows keeps the local queue and cache encrypted for the current Windows user.", wraplength=850).grid(row=26, column=0, columnspan=2, sticky="w", pady=30)
         setup.columnconfigure(1, weight=1)
@@ -1394,6 +1394,12 @@ class App(tk.Tk):
         bottom.pack(fill="x")
         confirmed = tk.BooleanVar(value=False)
         ttk.Checkbutton(bottom, text="I verified opening quantities at the END of the cutoff date; older history is already included.", variable=confirmed).pack(anchor="w", pady=6)
+        replace_existing = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            bottom,
+            text="Replace the previous Excel migration (removes its imported opening inventory and history; preserves normal entries)",
+            variable=replace_existing,
+        ).pack(anchor="w", pady=6)
         state = {}
         import_button = ttk.Button(bottom, text="Import reviewed data", state="disabled")
         import_button.pack(side="right")
@@ -1423,15 +1429,24 @@ class App(tk.Tk):
                 return messagebox.showinfo("Verify opening inventory", "Review the quantities, history and warnings, then check the verification box.", parent=window)
             if {k: v.get().strip() for k, v in variables.items()} != state.get("arguments"):
                 return messagebox.showinfo("Preview needed", "The import settings changed. Preview again before importing.", parent=window)
+            replacing = replace_existing.get()
+            if replacing and not messagebox.askyesno(
+                "Replace previous migration?",
+                "This permanently removes the prior Excel-imported opening inventory and imported history, then installs this reviewed migration.\n\nNormal entries created in the application are preserved and reapplied to the new opening balances. Continue?",
+                parent=window,
+            ):
+                return
             import_button.configure(state="disabled")
             def success(result):
-                messagebox.showinfo("Migration complete", "The reviewed opening inventory and history were imported successfully.", parent=window)
+                action = "replaced" if result.get("replaced") else "imported"
+                messagebox.showinfo("Migration complete", f"The reviewed opening inventory and history were {action} successfully.", parent=window)
                 window.destroy()
                 self.start_sync()
             def failure(error):
                 import_button.configure(state="normal")
                 messagebox.showerror("Migration not confirmed", str(error) + "\nRetry the same reviewed import if the connection failed; it is safe to retry.", parent=window)
-            self.background(lambda: self.engine.transport.post("/import", state["bundle"]), success, failure)
+            payload = {**state["bundle"], "replace_existing_migration": replacing}
+            self.background(lambda: self.engine.transport.post("/import", payload), success, failure)
         import_button.configure(command=import_data)
         ttk.Button(bottom, text="Preview and validate", command=preview_data).pack(side="left")
 
