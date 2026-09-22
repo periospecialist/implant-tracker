@@ -1,33 +1,49 @@
-# Implant Inventory 2.7.0 — shared-folder edition
+# Implant Inventory 2.8.0 — shared-folder edition
 
 [![Build and release Windows apps](https://github.com/periospecialist/implant-tracker/actions/workflows/windows-release.yml/badge.svg)](https://github.com/periospecialist/implant-tracker/actions/workflows/windows-release.yml)
 
-UI update: Manufacturer and Component Type share one horizontal filter row. Implant Type and Export shown rows share the second row. The Implant Type checkbox dropdown remains open while choices are selected. Inventory text is bold. Reorder is a fixed column with white YES/NO labels on red/green backgrounds, independent of manufacturer row colors. Rebuild and replace the desktop client folder; no host update is required.
+The Windows desktop app is available as a ready-to-run download and can check for new builds from its Setup tab. Every commit to the `master` branch creates a GitHub Release containing separate desktop and host ZIP files. See [USER_GUIDE.md](USER_GUIDE.md) for plain-language installation, updating, and host-moving instructions.
 
 The desktop apps and one always-on host exchange files through a folder you can already access, such as `\\SERVER\Perio\IMPLANTS\Inventory Exchange`. There are **no application accounts, access keys, URLs, certificates, or listening firewall ports**. Windows access to the shared folder controls access to the inventory, including component editing and imports.
 
 The host keeps the live SQLite database on its own local drive. Staff PCs never open that database over the network. Completed backups and exchange files go into the shared folder. Staff can keep entering usage or stocking during an outage; each desktop retains a local queue and synchronizes when the host and folder become available.
 
-This ZIP contains source and Windows build scripts, not precompiled EXEs. Rebuild both applications on Windows before using version 2. Windows GUI, packaging, DPAPI, and your office's actual SMB share need the acceptance check below.
+No Python installation is needed when using the prebuilt Windows downloads. Source builds are still supported for developers. Windows GUI, packaging, DPAPI, and your office's actual SMB share need the acceptance check below.
 
 ## Desktop appearance
 
-Choose **Light** or **Dark** in the status bar. The selection is saved for the next launch. Rounded navigation, content panels, blue primary actions, and a quieter footer establish the new hierarchy. See `UI_DESIGN.md` for layout, padding, typography, and platform limitations. This desktop update works with the existing version 2.4/2.4.1 host.
+Choose **Light** or **Dark** in the status bar. The selection is saved for the next launch. Rounded navigation, content panels, blue primary actions, and a quieter footer establish the new hierarchy. See `UI_DESIGN.md` for layout, padding, typography, and platform limitations. Desktop and host releases are built from the same commit.
 
-## Start here
+## Start here — prebuilt Windows downloads
 
-1. Close the old desktop apps and stop the old host using **Ctrl+C**. Keep the existing database, `server.json`, and each PC's local cache.
-2. Extract this package into a **new local folder** and run `BUILD_WINDOWS.cmd`. If Python 3.12 is missing, the script uses Windows Package Manager (`winget`) to install it for the current user. If `winget` is unavailable, it tells you to install Python 3.12 manually. The build skips automated tests and proceeds directly to dependency installation and EXE creation.
-3. On the computer that will remain on, run **`SETUP_HOST.cmd`** from the extracted folder. If you built on a different computer, copy the complete extracted folder including `dist` to this host first.
+1. Open the [latest GitHub Release](https://github.com/periospecialist/implant-tracker/releases/latest).
+2. On each staff PC, download `ImplantInventory-Windows.zip`, choose **Extract all**, then double-click **`INSTALL.cmd`**. It installs the program for the current Windows user and creates an **Implant Inventory** desktop shortcut. Windows SmartScreen may require **More info → Run anyway** because the executable is not code-signed.
+3. On the computer that will remain on, download and extract `InventoryServer-Windows.zip`, then run **`SETUP_HOST.cmd`**. Keep an existing `server.json` and database when upgrading.
 4. The setup script installs the host application under `%LOCALAPPDATA%\ImplantInventoryHost\App`. When asked for `server.json`, select your **existing configuration** to keep its database. It detects the previous default at `C:\ImplantInventoryServer\server.json` when present. If you never set up a host, accept the new default.
 5. Enter the full shared-folder path. The host will create its exchange subfolders using your existing Windows permissions. Choose a dedicated subfolder rather than the root of a share.
 6. Choose whether to start the host automatically when you sign in. Setup creates a **Start Inventory Host** desktop shortcut, and optionally a Startup shortcut for your current Windows account. No administrator task or firewall change is required by this setup.
-7. Copy the complete rebuilt `dist\ImplantInventory` folder to each staff PC, keeping `_internal` next to the EXE. Open the new `ImplantInventory.exe`.
+7. Open **Implant Inventory** from the new desktop shortcut on each staff PC.
 8. On every PC, open **Setup**, enter the **same exchange folder**, and click **Save folder and sync**. There are no other connection fields.
 
 Keep the host awake, connected to the office network, and signed in. Locking its screen is fine. With the optional Startup shortcut, the host restarts when you sign in after a reboot; it does not run while signed out. If an older Task Scheduler task was configured for the previous EXE, disable that old task before using the new shortcut so the old server does not restart alongside the new host.
 
 If office policy blocks PowerShell scripts, use the manual executable commands below or the office's approved script-running method. The supplied scripts do not change execution policy or Windows permissions.
+
+## Desktop updates
+
+The app quietly checks the repository's latest Release after startup. Open **Setup → Application updates** to check manually. When an update is available, choose **Download and install update**. The app downloads the GitHub HTTPS release asset, closes, replaces only its application folder, and reopens. Its configuration, encrypted offline cache, and unsent entries remain under `%LOCALAPPDATA%\ImplantInventory` and are not removed.
+
+For a manual update, download and extract `ImplantInventory-Windows.zip`, then run `INSTALL.cmd` again. The underlying `Update.ps1` can also copy a centrally managed build:
+
+```powershell
+.\Update.ps1 -Source "P:\Implant_Inventory_Application\dist\ImplantInventory"
+```
+
+The destination is `%LOCALAPPDATA%\ImplantInventory\App`; the data folder itself is deliberately not replaced.
+
+## Moving to a different host computer
+
+This is a data move, not just a fresh installation. Stop the old host, take a final backup, and keep the old computer offline while moving. Copy its `server.json` and the complete local database directory to the new computer, preserving relative paths. Install the new host ZIP, remove or archive the exchange folder's `host.json`, then start the new host with the copied configuration. Preserve the existing `host_id`, never run both hosts, and verify inventory and a test sync before retiring the old machine. Detailed safeguards and a copyable prompt for working through the move with an assistant are in [USER_GUIDE.md](USER_GUIDE.md#move-the-host-to-another-computer).
 
 ## Upgrade details
 
@@ -107,7 +123,7 @@ Completed abandoned responses and incomplete transfer files expire after 24 hour
 
 Placed and O Box are usage classifications; both deduct the quantity. Negative current stock is retained and highlighted if disconnected PCs collectively report more usage than the last count. Reconcile physical counts using an addition or usage for the difference with an explanatory note.
 
-Version 2.4.1 retains the larger type, compact entry layout, and searchable REF selector while correcting checkbox semantics, moving the filter choices into compact menus, and replacing the reversal workflow with direct usage-entry removal.
+The current interface retains the larger type, compact entry layout, searchable REF selector, compact filter menus, and direct usage-entry removal.
 
 To remove an incorrect posted usage, select it in **Usage history** and choose **Remove selected entry**. Confirm the deletion; no written note is requested. The host permanently removes the row and restores its deducted quantity in one database transaction. This requires the host and exchange folder to be available and cannot be undone from the application. Stocking history remains read-only.
 
@@ -163,24 +179,26 @@ present. Python remains installed because other programs may use it.
 
 Local desktop payloads still use Windows DPAPI encryption, tied to the original Windows profile. This does not require an application login. Keep that profile and disk to recover unsent entries; copying the encrypted cache to a different Windows account is not a recovery method.
 
-## Build and acceptance check
+## Developer build and acceptance check
 
 ### Automated Windows builds and releases
 
-GitHub Actions tests and builds both Windows x64 applications on every pull request and every push to `master`. A successful `master` push publishes a prerelease containing:
+GitHub Actions tests and builds both Windows x64 applications on every pull request and every push to `master`. A successful `master` push publishes the latest Release containing:
 
-- `ImplantInventory-Windows-x64.zip`
-- `InventoryServer-Windows-x64.zip`
+- `ImplantInventory-Windows.zip`
+- `InventoryServer-Windows.zip`
 - `SHA256SUMS.txt`
 
-Pushing a version tag such as `v2.8.0` publishes the same verified packages as a normal GitHub Release. Each ZIP contains the complete PyInstaller folder, including `_internal`; extract and keep that folder together. Manual workflow runs also publish a uniquely numbered prerelease.
+Pushing a version tag such as `v2.8.0` publishes the same verified packages under that version. The desktop ZIP contains the executable, `_internal`, installer, and updater at its root. The host ZIP contains the guided setup scripts and complete PyInstaller host folder. Manual workflow runs also publish a uniquely numbered Release.
 
 `BUILD_WINDOWS.cmd` requires Windows. It locates Python 3.12 x64 or installs the per-user Python 3.12 package through `winget`, installs the pinned build dependencies, skips the test suite, and then produces:
 
 - `dist\ImplantInventory\ImplantInventory.exe`
 - `dist\InventoryServer\InventoryServer.exe`
 
-Copy each entire output folder, including `_internal`. No Python installation is required on staff PCs using the built applications. Build once on a computer that can install the build dependencies; daily operation uses the existing shared folder and needs no internet.
+Copy each entire output folder, including `_internal`. No Python installation is required on staff PCs using the built applications. Build once on a computer that can install the build dependencies; ordinary inventory operation uses the existing shared folder and needs no internet. Checking for or downloading an update does require internet access to GitHub.
+
+The GitHub workflow in `.github/workflows/windows-release.yml` runs tests, builds both applications on Windows, packages the ready-to-run ZIPs, writes SHA-256 checksums, and publishes a latest Release for every commit to `master`.
 
 After installation, verify both EXEs on Windows using a test entry: record usage on one PC, see the updated count on another, stop the host, record another entry, restart the host, and verify it is applied once. Reopen the desktop to confirm the local queue survives. Run the host shortcut after a restart/sign-in and confirm it publishes updates. Actual Windows and SMB behavior must be checked in your environment; `TEST_RESULTS.md` states what was executed during development.
 
@@ -193,10 +211,12 @@ After installation, verify both EXEs on Windows using a test entry: record usage
 | `inventory/server.py` | Folder processor, host configuration, backups |
 | `inventory/client.py` | Local outbox, cached quantities, synchronization |
 | `inventory/desktop.py` | Forms, tables, setup, migration preview |
+| `inventory/update.py` | GitHub Release discovery, safe ZIP extraction, updater hand-off |
 | `inventory/settings.py` | Configuration and form defaults |
 | `inventory/secure.py` | Windows local-cache encryption |
 | `inventory/migration.py` | Read-only Excel migration parsing |
 | `setup_host.ps1` | Guided per-user installation and optional sign-in startup |
+| `Update.ps1` / `INSTALL.cmd` | Safe per-user desktop installation and program-only replacement |
 | `uninstall.ps1` / `UNINSTALL.cmd` | Guided local removal, optional backup, and separately confirmed shared-data removal |
 
 Run tests from the project folder using `python -m unittest discover -s tests -v`.

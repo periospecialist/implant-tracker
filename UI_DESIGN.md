@@ -1,4 +1,4 @@
-# Desktop interface — version 2.7.0
+# Desktop interface — version 2.8.0
 
 Compact rectangular controls, 12-point text, and light/dark appearance remain.
 Manufacturer and Component Type use visible multi-select toggle buttons on one row.
@@ -13,5 +13,5 @@ with bold white labels and a contrasting dark header. Selection, sorting, and
 vertical scrolling stay synchronized between the table and pinned column.
 The manual Inventory filter bar and color guide remain removed.
 
-Rebuild using BUILD_WINDOWS.cmd and replace the entire desktop client folder.
+End users install the ready-to-run desktop ZIP and update from **Setup → Application updates**. Developers can rebuild using `BUILD_WINDOWS.cmd`; updates replace the app folder while retaining the separate LocalAppData settings and queue.
 No host or database changes are required.

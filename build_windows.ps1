@@ -48,6 +48,8 @@ $InventoryPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 Invoke-Checked $InventoryPython @('-m', 'pip', 'install', '-r', 'requirements-build.txt')
 Invoke-Checked $InventoryPython @('-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir', '--windowed', '--name', 'ImplantInventory', 'run_desktop.py')
 Invoke-Checked $InventoryPython @('-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir', '--console', '--name', 'InventoryServer', 'run_server.py')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Update.ps1') -Destination (Join-Path $PSScriptRoot 'dist\ImplantInventory\Update.ps1') -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'INSTALL.cmd') -Destination (Join-Path $PSScriptRoot 'dist\ImplantInventory\INSTALL.cmd') -Force
 Write-Host 'Build complete. Copy each whole folder under dist; keep its _internal folder beside the EXE.'
 Write-Host 'Desktop: dist\ImplantInventory\ImplantInventory.exe'
 Write-Host 'Server:  dist\InventoryServer\InventoryServer.exe'

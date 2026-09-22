@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
@@ -17,6 +18,7 @@ from .client import LocalStore, SyncEngine, Transport
 from .core import COMPONENT_FIELDS, DETAIL_FIELDS, ValidationError, day, integer, normalize_event, ref_id
 from .migration import prepare
 from .settings import data_directory, load_config, save_config
+from .update import build_summary, download_release, latest_release, launch_installer
 
 
 INVENTORY_COLUMNS = [("ref_id", "REF ID"), ("manufacturer", "Manufacturer"), ("implant_type", "Implant type"),
@@ -902,6 +904,9 @@ class App(tk.Tk):
         self.poll_after = self.after(100, self.poll)
         self.initial_sync_after = self.after(300, self.start_sync)
         self.periodic_after = self.after(self.config["sync_seconds"] * 1000, self.periodic)
+        self.update_after = None
+        if os.name == "nt" and getattr(sys, "frozen", False):
+            self.update_after = self.after(2500, lambda: self.check_for_updates(silent=True))
         self.refresh()
 
     def change_appearance(self, event=None):
@@ -1085,11 +1090,69 @@ class App(tk.Tk):
         ttk.Label(setup, text="Add or remove Periodontists, Referring Dentists, and Assistants. Referring Dentists can also be imported from a selected CSV column.", wraplength=850).grid(row=15, column=0, columnspan=3, sticky="w", pady=(6, 10))
         ttk.Button(setup, text="Manage names…", command=self.staff_directory_dialog).grid(row=16, column=0, columnspan=2, sticky="w")
         ttk.Separator(setup).grid(row=17, column=0, columnspan=3, sticky="ew", pady=20)
-        ttk.Label(setup, text="Opening inventory and Excel migration", style="Title.TLabel").grid(row=18, column=0, columnspan=2, sticky="w")
-        ttk.Label(setup, text="Import starting quantities and existing history into an empty database while the host is running.\nChoose a verified opening balance date. Entries on/before that date are archived; later entries change stock.", wraplength=850).grid(row=19, column=0, columnspan=2, sticky="w", pady=12)
-        ttk.Button(setup, text="Open Excel import…", command=self.import_dialog).grid(row=20, column=0, columnspan=2, sticky="w")
-        ttk.Label(setup, text="Form fields, required fields and staff dropdowns are managed centrally in server.json.\nManufacturer, implant type and component choices can be extended in client.json.\nWindows keeps the local queue and cache encrypted for the current Windows user.", wraplength=850).grid(row=21, column=0, columnspan=2, sticky="w", pady=30)
+        ttk.Label(setup, text="Application updates", style="Title.TLabel").grid(row=18, column=0, columnspan=2, sticky="w")
+        self.update_message = ttk.Label(setup, text=f"Installed build: {build_summary()}", wraplength=850)
+        self.update_message.grid(row=19, column=0, columnspan=2, sticky="w", pady=(10, 6))
+        self.update_button = ttk.Button(setup, text="Check for updates", command=self.check_for_updates)
+        self.update_button.grid(row=20, column=0, columnspan=2, sticky="w")
+        ttk.Label(setup, text="An update replaces program files only. Settings and entries waiting to sync stay on this computer.",
+                  wraplength=850).grid(row=21, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Separator(setup).grid(row=22, column=0, columnspan=3, sticky="ew", pady=20)
+        ttk.Label(setup, text="Opening inventory and Excel migration", style="Title.TLabel").grid(row=23, column=0, columnspan=2, sticky="w")
+        ttk.Label(setup, text="Import starting quantities and existing history into an empty database while the host is running.\nChoose a verified opening balance date. Entries on/before that date are archived; later entries change stock.", wraplength=850).grid(row=24, column=0, columnspan=2, sticky="w", pady=12)
+        ttk.Button(setup, text="Open Excel import…", command=self.import_dialog).grid(row=25, column=0, columnspan=2, sticky="w")
+        ttk.Label(setup, text="Form fields, required fields and staff dropdowns are managed centrally in server.json.\nManufacturer, implant type and component choices can be extended in client.json.\nWindows keeps the local queue and cache encrypted for the current Windows user.", wraplength=850).grid(row=26, column=0, columnspan=2, sticky="w", pady=30)
         setup.columnconfigure(1, weight=1)
+
+    def check_for_updates(self, silent=False):
+        self.update_button.configure(state="disabled")
+        if not silent:
+            self.update_message.configure(text="Checking GitHub for the latest Windows release…")
+
+        def success(release):
+            self.available_release = release
+            if release["available"]:
+                self.update_message.configure(text=f"Update available: {release['name']}")
+                self.update_button.configure(text="Download and install update", command=self.install_update,
+                                             state="normal")
+            else:
+                self.update_message.configure(text=f"Implant Inventory is up to date ({build_summary()}).")
+                self.update_button.configure(text="Check again", command=self.check_for_updates, state="normal")
+
+        def failure(error):
+            self.update_button.configure(text="Check again", command=self.check_for_updates, state="normal")
+            if not silent:
+                self.update_message.configure(text=f"Could not check for updates: {error}")
+
+        self.background(latest_release, success, failure)
+
+    def install_update(self):
+        release = getattr(self, "available_release", None)
+        if not release:
+            return self.check_for_updates()
+        if not messagebox.askyesno(
+                "Install update",
+                "Implant Inventory will download the update, close, install it, and reopen.\n\n"
+                "Entries waiting to sync and settings will be kept.", parent=self):
+            return
+        self.update_button.configure(state="disabled")
+        self.update_message.configure(text="Downloading update…")
+
+        def work():
+            source = download_release(release, self.config_path.parent / "updates")
+            launch_installer(source, self.config_path)
+            return source
+
+        def success(_):
+            self.update_message.configure(text="Installer started. Closing Implant Inventory…")
+            self.after(250, self.close)
+
+        def failure(error):
+            self.update_message.configure(text=f"Update was not installed: {error}")
+            self.update_button.configure(state="normal")
+            messagebox.showerror("Update failed", str(error), parent=self)
+
+        self.background(work, success, failure)
 
     def save_connection(self):
         if self.syncing:
@@ -1376,7 +1439,8 @@ class App(tk.Tk):
         self.closing = True
         for callback in (getattr(self, "poll_after", None),
                          getattr(self, "initial_sync_after", None),
-                         getattr(self, "periodic_after", None)):
+                         getattr(self, "periodic_after", None),
+                         getattr(self, "update_after", None)):
             if callback:
                 try:
                     self.after_cancel(callback)

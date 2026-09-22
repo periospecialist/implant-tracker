@@ -1,9 +1,9 @@
-# Guided per-user host installation. Run after BUILD_WINDOWS.cmd succeeds.
+# Guided per-user host installation from the host release ZIP or a local build.
 $ErrorActionPreference = 'Stop'
 $BuildFolder = Join-Path $PSScriptRoot 'dist\InventoryServer'
 $BuiltExecutable = Join-Path $BuildFolder 'InventoryServer.exe'
 if (-not (Test-Path -LiteralPath $BuiltExecutable)) {
-    throw 'Run BUILD_WINDOWS.cmd first, then run SETUP_HOST.cmd again.'
+    throw 'This package is incomplete. Extract the complete InventoryServer-Windows.zip, or run BUILD_WINDOWS.cmd from the source project, then try again.'
 }
 
 $HostRoot = Join-Path $env:LOCALAPPDATA 'ImplantInventoryHost'

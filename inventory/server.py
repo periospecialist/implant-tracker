@@ -253,7 +253,7 @@ class FolderProcessor:
                 continue
             except (OSError, sqlite3.OperationalError):
                 logging.exception("Could not process exchange request %s; it remains queued", path.name)
-        if changed or time.monotonic() - self.last_snapshot >= 5:
+        if changed or self.last_snapshot == 0 or time.monotonic() - self.last_snapshot >= 5:
             atomic_json(self.root / "snapshots" / "latest.json", self.snapshot())
             self.last_snapshot = time.monotonic()
         try:
