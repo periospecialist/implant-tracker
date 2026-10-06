@@ -76,7 +76,7 @@ def normalize_event(data):
     if kind not in TABLES:
         raise ValidationError("Entry must be usage or addition")
     event = {"id": identity, "kind": kind, "date": day(data.get("date")),
-             "ref_id": ref_id(data.get("ref_id")), "quantity": integer(data.get("quantity"), 1)}
+             "ref_id": ref_id(data.get("ref_id")), "quantity": integer(data.get("quantity"), 0)}
     for key in DETAIL_FIELDS:
         event[key] = text(data.get(key), 4000 if key == "notes" else 250)
     extra = data.get("extra", {})
@@ -102,8 +102,10 @@ class Database:
             setup.execute("PRAGMA journal_mode=WAL")
         with self.connect() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise RuntimeError("Unsupported database schema; use a matching application version")
+            if version == 1:
+                self.backup(Path(self.path).with_name(Path(self.path).name + ".before-v2-" + uuid4().hex + ".bak"))
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS component_list (
                     ref_id TEXT PRIMARY KEY COLLATE NOCASE,
@@ -118,11 +120,20 @@ class Database:
                     quantity INTEGER NOT NULL
                 );
             """)
+            # executescript commits its transaction; migrate both logs atomically.
+            db.execute("BEGIN IMMEDIATE")
+            if version == 1:
+                for table in TABLES.values():
+                    schema = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0]
+                    db.execute(f"ALTER TABLE {table} RENAME TO {table}_old")
+                    db.execute(schema.replace("CHECK(quantity>0)", "CHECK(quantity>=0)"))
+                    db.execute(f"INSERT INTO {table} SELECT * FROM {table}_old")
+                    db.execute(f"DROP TABLE {table}_old")
             for table in TABLES.values():
                 db.execute(f"""CREATE TABLE IF NOT EXISTS {table} (
                     id TEXT PRIMARY KEY, date TEXT NOT NULL,
                     ref_id TEXT NOT NULL REFERENCES component_list(ref_id),
-                    quantity INTEGER NOT NULL CHECK(quantity>0),
+                    quantity INTEGER NOT NULL CHECK(quantity>=0),
                     tooth TEXT NOT NULL, placement TEXT NOT NULL, patient TEXT NOT NULL,
                     periodontist TEXT NOT NULL, referring_dentist TEXT NOT NULL,
                     assistant TEXT NOT NULL, signed_by TEXT NOT NULL, notes TEXT NOT NULL,
@@ -132,7 +143,12 @@ class Database:
                 )""")
                 db.execute(f"CREATE INDEX IF NOT EXISTS {table}_ref_date ON {table}(ref_id,date)")
                 db.execute(f"CREATE INDEX IF NOT EXISTS {table}_reversal ON {table}(reversal_of)")
-            db.execute("PRAGMA user_version=1")
+            db.execute("""CREATE TABLE IF NOT EXISTS obox_adjustments (
+                id TEXT PRIMARY KEY, ref_id TEXT NOT NULL REFERENCES component_list(ref_id),
+                delta INTEGER NOT NULL, payload_hash TEXT NOT NULL,
+                reason TEXT NOT NULL, actor TEXT NOT NULL, received_at TEXT NOT NULL)""")
+            db.execute("CREATE INDEX IF NOT EXISTS obox_adjustments_ref ON obox_adjustments(ref_id)")
+            db.execute("PRAGMA user_version=2")
 
     @contextmanager
     def connect(self, write=False):
@@ -166,7 +182,7 @@ class Database:
         inventory = db.execute("SELECT * FROM inventory_supply WHERE ref_id=?", (event["ref_id"],)).fetchone()
         if not inventory:
             raise ValidationError("Unknown REF ID; add the component on the server first")
-        affects = not historical
+        affects = not historical and event["quantity"] > 0
         if affects and event["date"] <= inventory["opening_date"]:
             raise ValidationError("Entry date must be after the opening balance date; use history import for older entries")
         if event["date"] > date.today().isoformat():
@@ -334,7 +350,7 @@ class Database:
                 f"SELECT 1 FROM {table} WHERE ref_id=? AND actor NOT LIKE ? LIMIT 1",
                 (identity, actor_pattern),
             ).fetchone() for table in TABLES.values())
-            if used:
+            if used or db.execute("SELECT 1 FROM obox_adjustments WHERE ref_id=? LIMIT 1", (identity,)).fetchone():
                 raise ValidationError(
                     f"REF ID {identity} is missing from the new workbook but has normal activity; include it before replacing the migration"
                 )
@@ -373,6 +389,42 @@ class Database:
                               AND affects_stock=1), 0)
         """)
 
+    def _obox_balances(self, db):
+        # Read full history, independently of the desktop history window.
+        return {row["ref_id"]: row["quantity"] for row in db.execute("""
+            SELECT c.ref_id,
+                COALESCE((SELECT SUM(u.quantity) FROM component_usage_log u
+                    WHERE u.ref_id=c.ref_id AND lower(trim(u.placement)) IN ('o box','o-box','"o" box')
+                    AND u.reversal_of=''
+                    AND NOT EXISTS (SELECT 1 FROM component_addition_log a WHERE a.reversal_of=u.id)),0)
+                + COALESCE((SELECT SUM(delta) FROM obox_adjustments o WHERE o.ref_id=c.ref_id),0) AS quantity
+            FROM component_list c
+        """)}
+
+    def set_obox_quantity(self, data, actor):
+        identity = str(UUID(str(data.get("id", ""))))
+        reference = ref_id(data.get("ref_id"))
+        quantity = integer(data.get("quantity"))
+        expected = integer(data.get("expected"), -1_000_000)
+        reason = text(data.get("reason"), 4000)
+        if not reason:
+            raise ValidationError("A reason is required for an O-Box count change")
+        payload = digest({"ref_id": reference, "quantity": quantity, "expected": expected, "reason": reason})
+        with self.connect(write=True) as db:
+            existing = db.execute("SELECT payload_hash FROM obox_adjustments WHERE id=?", (identity,)).fetchone()
+            if existing:
+                if existing[0] != payload:
+                    raise ValidationError("O-Box adjustment ID already exists with different contents")
+                return {"saved": True, "duplicate": True}
+            current = self._obox_balances(db).get(reference)
+            if current is None:
+                raise ValidationError("Unknown REF ID")
+            if current != expected:
+                raise ValidationError("O-Box count changed on another computer. Sync and try again.")
+            db.execute("INSERT INTO obox_adjustments VALUES (?,?,?,?,?,?,?)",
+                       (identity, reference, quantity-current, payload, reason, actor, now()))
+        return {"saved": True}
+
     def snapshot(self, known_ids=(), history_limit=2000):
         if len(known_ids) > 1000:
             raise ValidationError("At most 1,000 receipt IDs per sync")
@@ -388,7 +440,7 @@ class Database:
                     row.pop("payload_hash")
             receipts = [identity for identity in known_ids if self._find(db, identity)]
             totals = {kind: db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for kind, table in TABLES.items()}
-            return {"inventory": inventory, "logs": logs, "receipts": receipts,
+            return {"inventory": inventory, "obox": self._obox_balances(db), "logs": logs, "receipts": receipts,
                     "totals": totals, "as_of": now()}
 
     def backup(self, destination):
