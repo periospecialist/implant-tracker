@@ -1,4 +1,4 @@
-"""One host processes a shared folder; the four-table database stays on its local drive."""
+"""One host processes a shared folder; the database stays on its local drive."""
 import argparse
 import csv
 from copy import deepcopy
@@ -188,6 +188,12 @@ class FolderProcessor:
                     results.append({"id": data.get("id", "") if isinstance(data, dict) else "",
                                     "status": "error", "error": str(error)})
             return {"results": results}
+        if operation == "/obox_quantity":
+            ids = data.get("known_ids", [])
+            if not isinstance(ids, list) or len(ids) > 1000 or not all(isinstance(i, str) for i in ids):
+                raise ValidationError("Send at most 1,000 receipt IDs")
+            result = self.database.set_obox_quantity(data, f"Computer: {computer}")
+            return {**result, "snapshot": self.snapshot(ids)}
         if operation == "/delete_usage":
             result = self.database.delete_usage(data.get("id"))
             return {**result, "snapshot": self.snapshot()}

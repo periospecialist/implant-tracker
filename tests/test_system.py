@@ -43,10 +43,10 @@ class BaseTest(unittest.TestCase):
 
 
 class DatabaseTests(BaseTest):
-    def test_exactly_four_tables_and_valid_foreign_keys(self):
+    def test_expected_tables_and_valid_foreign_keys(self):
         with self.db.connect() as db:
             tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            self.assertEqual(tables, {"component_list", "inventory_supply", "component_usage_log", "component_addition_log"})
+            self.assertEqual(tables, {"component_list", "inventory_supply", "component_usage_log", "component_addition_log", "obox_adjustments"})
         with self.assertRaises(ValidationError):
             self.db.apply(event(), "Tester")
 
@@ -121,7 +121,7 @@ class DatabaseTests(BaseTest):
 
     def test_dates_and_quantities_are_validated(self):
         self.db.save_component(component())
-        for changes in ({"quantity": 0}, {"quantity": 1.5}, {"quantity": True},
+        for changes in ({"quantity": -1}, {"quantity": 1.5}, {"quantity": True},
                         {"date": CUTOFF}, {"date": "not a date"},
                         {"date": (date.today() + timedelta(days=1)).isoformat()}):
             with self.subTest(changes=changes), self.assertRaises(ValidationError):

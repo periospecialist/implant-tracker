@@ -46,6 +46,35 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(self.app.inventory.rows[0]["estimated_quantity"], 18)
         self.assertEqual(form.variables["patient"].get(), "")
 
+    def test_zero_backfill_in_both_forms(self):
+        for kind in ("usage", "addition"):
+            form = self.app.forms[kind]
+            values = {"ref_id": "001.TEST", "quantity": "0", "date": "2000-01-01",
+                      "patient": "Synthetic", "periodontist": "Test", "assistant": "Staff",
+                      "placement": "Placed", "signed_by": "Staff"}
+            for key, value in values.items():
+                if key in form.variables:
+                    form.variables[key].set(value)
+            with patch("inventory.desktop.messagebox.showerror") as error:
+                form.save()
+                error.assert_not_called()
+            self.assertEqual(form.variables["quantity"].get(), "1")
+        self.assertEqual(len(self.app.store.entries()), 2)
+        self.assertEqual(self.app.inventory.rows[0]["estimated_quantity"], 20)
+
+    def test_obox_pending_filter_and_sort(self):
+        from uuid import uuid4
+        self.app.store.queue({"id": str(uuid4()), "kind": "usage", "date": date.today().isoformat(),
+                              "ref_id": "001.TEST", "quantity": 2, "placement": "O Box"})
+        self.app.refresh()
+        self.assertEqual(self.app.obox.rows[0]["estimated_quantity"], 2)
+        self.assertIsNone(self.app.obox.reorder_tree)
+        self.app.obox.sort("estimated_quantity")
+        self.assertEqual(self.app.obox.visible[0]["ref_id"], "001.TEST")
+        self.app.obox_filters.variables["component_type"]["Unspecified"].set(True)
+        self.app.obox_filters.apply()
+        self.assertEqual(len(self.app.obox.visible), 1)
+
     def test_numeric_sort_and_combined_filters(self):
         table = self.app.inventory
         table.set_rows([{"ref_id": "A", "estimated_quantity": 10, "manufacturer": "Test", "reorder": "No"},
@@ -57,9 +86,9 @@ class GuiTests(unittest.TestCase):
         table.render()
         self.assertEqual([row["ref_id"] for row in table.visible], ["B"])
 
-    def test_seven_tabs_present(self):
+    def test_eight_tabs_present(self):
         labels = [self.app.notebook.tab(tab, "text") for tab in self.app.notebook.tabs()]
-        self.assertEqual(labels, ["Usage", "Stocking", "Inventory", "Usage history", "Stock history", "Sync queue", "Setup"])
+        self.assertEqual(labels, ["Usage", "Stocking", "Inventory", "O-Box", "Usage history", "Stock history", "Sync queue", "Setup"])
         self.assertEqual(list(self.app.connection_vars), ["exchange_folder"])
 
     def test_placement_is_exactly_two_read_only_choices(self):

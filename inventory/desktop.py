@@ -10,7 +10,7 @@ import re
 import sys
 import threading
 import tkinter as tk
-from tkinter import filedialog, font as tkfont, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 from uuid import uuid4
 
 from .appearance import Appearance
@@ -559,7 +559,7 @@ class EntryForm(ttk.Frame):
         self.refs = []
         title = "Record component usage" if kind == "usage" else "Add components to stock"
         ttk.Label(self, text=title, style="Title.TLabel").pack(anchor="w")
-        ttk.Label(self, text="Saved locally. Synced automatically.   * Required field", style="Muted.TLabel").pack(anchor="w", pady=(5, 12))
+        ttk.Label(self, text="Saved locally. Synced automatically.   * Required field   •   Quantity 0 records history without changing supply.", style="Muted.TLabel").pack(anchor="w", pady=(5, 12))
         canvas = tk.Canvas(self, highlightthickness=0, background="#f5f7fa")
         scroll = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
         scroll.pack(side="right", fill="y")
@@ -798,11 +798,11 @@ class EntryForm(ttk.Frame):
             identity = ref_id(values["ref_id"])
             if identity not in getattr(self, "components", {}):
                 raise ValidationError("Choose a REF ID from the component list. Sync first if this is a new computer.")
+            quantity = integer(values["quantity"], 0)
             entry_date = day(values["date"])
-            if entry_date > date.today().isoformat() or entry_date <= self.components[identity]["opening_date"]:
+            if entry_date > date.today().isoformat() or (quantity > 0 and entry_date <= self.components[identity]["opening_date"]):
                 raise ValidationError("Date must be after the opening balance date and no later than today")
-            quantity = integer(values["quantity"], 1)
-            if self.kind == "usage" and quantity > self.components[identity]["estimated_quantity"]:
+            if self.kind == "usage" and quantity > 0 and quantity > self.components[identity]["estimated_quantity"]:
                 if not messagebox.askyesno("Stock count needs review", "This usage exceeds the estimated stock. Save the actual usage and flag the balance for review?", parent=self):
                     return
             data = {key: value for key, value in values.items() if key in DETAIL_FIELDS or key in ("date", "ref_id", "quantity")}
@@ -878,6 +878,27 @@ class App(tk.Tk):
         self.inventory_filters = InventoryFilters(inventory_frame, self.inventory)
         self.inventory_filters.pack(fill="x", padx=4, pady=(4, 0))
         self.inventory.pack(fill="both", expand=True)
+        obox_frame = ttk.Frame(self.notebook)
+        self.notebook.add(obox_frame, text="O-Box")
+        ttk.Label(obox_frame, text="O-Box", style="Title.TLabel", padding=(10, 6)).pack(anchor="w")
+        ttk.Label(obox_frame, text="Counts start from recorded O-Box usage. Review against the physical box before relying on them.\n"
+                  "Set a count after placement/removal or a physical recount; general supply is unchanged.",
+                  padding=(10, 6)).pack(anchor="w")
+        controls = ttk.Frame(obox_frame, padding=8)
+        controls.pack(fill="x")
+        ttk.Button(controls, text="Set selected count", command=self.set_obox_count).pack(side="left")
+        self.obox_host_notice = ttk.Label(obox_frame, padding=(10, 4))
+        self.obox_host_notice.pack(anchor="w")
+        self.obox_show_empty = tk.BooleanVar(value=False)
+        ttk.Checkbutton(controls, text="Show empty components", variable=self.obox_show_empty,
+                        command=self.refresh).pack(side="left", padx=10)
+        self.obox = DataTable(obox_frame, INVENTORY_COLUMNS[:6], show_manual_filters=False,
+                              row_style=inventory_row_style, cell_formatter=inventory_cell_display,
+                              show_export=False)
+        self.obox.tree.configure(style="Inventory.Treeview")
+        self.obox_filters = InventoryFilters(obox_frame, self.obox)
+        self.obox_filters.pack(fill="x", padx=4, pady=(4, 0))
+        self.obox.pack(fill="both", expand=True)
         self.log_tables = {}
         for kind, title in (("usage", "Usage history"), ("addition", "Stock history")):
             frame = ttk.Frame(self.notebook)
@@ -982,6 +1003,11 @@ class App(tk.Tk):
     def refresh(self):
         snapshot, entries, rows = self.store.view()
         self.inventory_filters.update_rows(rows)
+        self.obox_host_notice.configure(text="" if "obox" in snapshot else
+                                        "Update the inventory host and sync to load O-Box counts.")
+        box_rows = self.store.obox_rows(snapshot, entries)
+        self.obox_filters.update_rows([row for row in box_rows
+                                      if row["estimated_quantity"] != 0 or self.obox_show_empty.get()])
         self.pending.set_rows(entries)
         for kind, table in self.log_tables.items():
             table.set_rows(snapshot["logs"][kind])
@@ -1041,6 +1067,37 @@ class App(tk.Tk):
             self.status.configure(text="Could not remove usage entry")
             messagebox.showerror("Removal failed", str(error), parent=self)
         self.background(remove, success, failure)
+
+    def set_obox_count(self):
+        row = self.obox.selected()
+        if not row:
+            return
+        if any(e["ref_id"] == row["ref_id"] and e["state"] in ("pending", "accepted")
+               for e in self.store.entries()):
+            return messagebox.showinfo("Sync first", "Sync this component's queued entries before changing its O-Box count.", parent=self)
+        quantity = simpledialog.askinteger("O-Box count", f"Current physical count for {row['ref_id']}:",
+                                           initialvalue=max(0, row["estimated_quantity"]), minvalue=0,
+                                           maxvalue=1_000_000, parent=self)
+        if quantity is None:
+            return
+        reason = simpledialog.askstring("Reason", "Reason (for example: placed one implant, or initial physical count):", parent=self)
+        if not reason or not reason.strip():
+            return
+        data = {"id": str(uuid4()), "ref_id": row["ref_id"], "quantity": quantity,
+                "expected": row["estimated_quantity"], "reason": reason}
+        def save():
+            # Serialize against this desktop's sync so its cache cannot regress.
+            with self.engine.lock:
+                queued = [e for e in self.store.entries() if e["state"] in ("pending", "accepted")]
+                queued.sort(key=lambda e: e["state"] != "accepted")
+                data["known_ids"] = [e["id"] for e in queued[:1000]]
+                result = self.engine.transport.post("/obox_quantity", data)
+                self.store.install_snapshot(result["snapshot"])
+        def success(_):
+            self.status.configure(text="O-Box count saved • general supply unchanged")
+            self.refresh()
+        self.background(save, success, lambda error: messagebox.showerror("O-Box count not confirmed",
+                        str(error) + "\nSync and check the count before trying again.", parent=self))
 
     def setup_tab(self):
         setup_tab = ttk.Frame(self.notebook)

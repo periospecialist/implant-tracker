@@ -25,6 +25,28 @@ class DesktopActionTests(unittest.TestCase):
         })
         fake.start_sync.assert_called_once_with()
 
+    def test_obox_count_posts_reason_and_preserves_receipts(self):
+        import threading
+        row = {"ref_id": "REF-1", "estimated_quantity": 3}
+        transport = MagicMock()
+        transport.post.return_value = {"snapshot": {"obox": {"REF-1": 1}}}
+        fake = SimpleNamespace(obox=SimpleNamespace(selected=lambda: row), status=MagicMock(),
+                               engine=SimpleNamespace(transport=transport, lock=threading.Lock()),
+                               store=MagicMock(), refresh=MagicMock())
+        fake.store.entries.return_value = [{"id": "other-entry", "ref_id": "REF-2", "state": "accepted"}]
+        fake.background = lambda work, success, failure: success(work())
+        with patch("inventory.desktop.simpledialog.askinteger", return_value=1), \
+                patch("inventory.desktop.simpledialog.askstring", return_value="Placed two"):
+            App.set_obox_count(fake)
+        operation, data = transport.post.call_args.args
+        self.assertEqual(operation, "/obox_quantity")
+        self.assertEqual(data["expected"], 3)
+        self.assertEqual(data["quantity"], 1)
+        self.assertEqual(data["known_ids"], ["other-entry"])
+        self.assertEqual(data["reason"], "Placed two")
+        fake.store.install_snapshot.assert_called_once_with({"obox": {"REF-1": 1}})
+        fake.refresh.assert_called_once_with()
+
     def test_remove_usage_uses_engine_transport_and_installs_snapshot(self):
         row = {"id": "entry-1", "ref_id": "REF-1", "quantity": 2}
         snapshot = {"inventory": [], "logs": {"usage": [], "addition": []},

@@ -116,6 +116,19 @@ class LocalStore:
                          "attention": "Negative balance" if estimated < 0 else ""})
         return snapshot, entries, rows
 
+    @staticmethod
+    def obox_rows(snapshot, entries):
+        if "obox" not in snapshot:
+            return []  # An old host cannot provide complete O-Box counts.
+        balances = dict(snapshot["obox"])
+        for entry in entries:
+            if (entry["state"] in ("pending", "accepted") and entry["kind"] == "usage"
+                    and entry["placement"].strip().casefold() in ('o box', 'o-box', '"o" box')
+                    and not entry.get("reversal_of")):
+                balances[entry["ref_id"]] = balances.get(entry["ref_id"], 0) + entry["quantity"]
+        return [{**component, "estimated_quantity": balances.get(component["ref_id"], 0)}
+                for component in snapshot["inventory"]]
+
 
 class SyncEngine:
     def __init__(self, store, transport):

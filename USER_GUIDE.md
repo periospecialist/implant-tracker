@@ -82,3 +82,15 @@ Copyable support prompt:
 ## Getting help safely
 
 When asking an assistant for help, share error text and paths but do not upload patient names, exported history, the database, or exchange files. An assistant can diagnose installation and path problems without those records.
+
+## O-Box and history-only backfill
+
+Update the Inventory Host before updating desktops. The host automatically backs up the existing version 1 database beside the database file and upgrades it to version 2. Keep that backup for recovery; the old host cannot open the upgraded database. Do not re-import Excel for this update.
+
+The **O-Box** tab beside Inventory uses the same sorting and component filters. Initially, its counts come from recorded O-Box usage. Review these against the physical box because historical removals were not recorded. Select a component and choose **Set selected count**, enter the physical quantity remaining, and give a reason. Use **Show empty components** to initialize a component that has no recorded O-Box stock. Count changes require the host; sync any queued entries for that component first.
+
+When an implant leaves O-Box, reduce its O-Box count with **Set selected count**. This does not reduce general supply again. If you also need a patient usage record, enter it under Usage with quantity **0** and placement **Placed**, recording the actual number and circumstances in Notes. Counts and patient history are separate actions; finish both when needed.
+
+In Usage and Stocking, quantity **0** saves a history entry without changing supply. This also allows dates on or before the opening balance date. Other required fields still apply, and future dates are rejected. The default remains **1**. Zero entries do not add to implant quantity totals or O-Box counts.
+
+Correcting/deleting historical O-Box entries or replacing an Excel import can change O-Box counts; review the physical box afterward. Negative counts stay visible so discrepancies can be corrected.
