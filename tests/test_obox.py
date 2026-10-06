@@ -1,6 +1,7 @@
 """O-Box balances and schema upgrades must never double-deduct general supply."""
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from uuid import uuid4
 
 from test_system import BaseTest, component, event, CUTOFF
@@ -119,7 +120,7 @@ class OBoxTests(BaseTest):
             self.assertEqual(len(db.execute("PRAGMA index_list(component_usage_log)").fetchall()), 3)
         backups = list(self.root.glob("*.before-v2-*.bak"))
         self.assertEqual(len(backups), 1)
-        with sqlite3.connect(backups[0]) as db:
+        with closing(sqlite3.connect(backups[0])) as db:
             self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 1)
         self.assertTrue(upgraded.apply(entry, "Staff")["duplicate"])
         for kind in ("usage", "addition"):
